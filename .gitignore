@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# HA runtime files — never commit these
+custom_components/ptv/__pycache__/
+ptv_gtfs_cache.json
+*.log
+
+# Secrets
+.env
+secrets.yaml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
