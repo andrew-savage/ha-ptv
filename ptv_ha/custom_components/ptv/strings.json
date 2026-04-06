@@ -1,0 +1,34 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "PTV – API Key",
+        "description": "Enter your Transport Victoria Open Data API key. Register at {portal_url}.",
+        "data": {"api_key": "API Key"}
+      },
+      "lines": {
+        "title": "PTV – Select Lines",
+        "data": {
+          "lines": "Train Lines",
+          "scan_interval": "Polling interval (seconds)"
+        }
+      },
+      "station": {
+        "title": "PTV – Add Station{added}",
+        "description": "Add a station on {lines} to monitor. Select '(No more stations)' when done.",
+        "data": {
+          "name": "Station",
+          "directions": "Directions to monitor",
+          "count": "Number of upcoming trains to track (1–4)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Unable to reach the PTV API.",
+      "invalid_auth": "API key rejected.",
+      "no_lines_selected": "Select at least one line.",
+      "unknown": "Unexpected error."
+    },
+    "abort": {"already_configured": "PTV is already configured."}
+  }
+}
