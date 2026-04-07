@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="home_assistant_ptv_logo.png" alt="PTV Home Assistant Integration" width="600">
+</p>
+
 # PTV – Home Assistant Integration
 
 A Home Assistant custom integration for **Public Transport Victoria (PTV)** metro train services. Provides real-time delays, cancellations, service alerts, vehicle positions, and scheduled departure times for any Melbourne Metro station.
