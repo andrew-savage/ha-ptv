@@ -15,9 +15,9 @@
       },
       "alerts": {
         "title": "PTV – Service Alert Filters",
-        "description": "Choose which types of service alerts to include. Deselect types like 'Other effect' to ignore car park and minor notices.",
+        "description": "Select which alert types should trigger your PTV sensors. Checked types will count as active alerts. Uncheck 'Other effect' and 'No effect' to ignore car park notices and informational updates.",
         "data": {
-          "alert_effects": "Alert types to include"
+          "alert_effects": "Include alerts of these types"
         }
       },
       "station": {

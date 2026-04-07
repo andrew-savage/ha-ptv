@@ -1,0 +1,205 @@
+blueprint:
+  name: PTV Commute Notifications
+  description: >
+    Sends two daily notifications for your PTV commute:
+
+    **Morning status** — fires at a set time with the overall line condition
+    (on time, delays, alerts, cancellations) so you know what to expect
+    before you leave the house.
+
+    **Departure reminder** — fires closer to when you leave, listing the
+    next 4 upcoming trains from your station so you can time your walk.
+
+    Both notifications are sent to a mobile app notify service and include
+    emoji status indicators. Only runs on selected weekdays.
+  domain: automation
+  source_url: https://github.com/andrew-savage/ha-ptv
+
+  input:
+
+    # ── Line ────────────────────────────────────────────────────────────────
+    problem_level_sensor:
+      name: Line Problem Level Sensor
+      description: >
+        e.g. sensor.ptv_hurstbridge_line_problem_level
+        (state is one of: none / delays / alert / cancellations / major)
+      selector:
+        entity:
+          domain: sensor
+
+    problem_summary_sensor:
+      name: Line Problem Summary Sensor
+      description: >
+        e.g. sensor.ptv_hurstbridge_line_problem_summary
+        Plain English sentence describing the current situation.
+      selector:
+        entity:
+          domain: sensor
+
+    # ── Station departure sensors ────────────────────────────────────────────
+    train_1:
+      name: Next train (1st)
+      description: e.g. sensor.ptv_hurstbridge_ivanhoe_citybound_1
+      selector:
+        entity:
+          domain: sensor
+
+    train_2:
+      name: Next train (2nd)
+      description: e.g. sensor.ptv_hurstbridge_ivanhoe_citybound_2
+      selector:
+        entity:
+          domain: sensor
+
+    train_3:
+      name: Next train (3rd)
+      description: e.g. sensor.ptv_hurstbridge_ivanhoe_citybound_3
+      selector:
+        entity:
+          domain: sensor
+
+    train_4:
+      name: Next train (4th)
+      description: e.g. sensor.ptv_hurstbridge_ivanhoe_citybound_4
+      selector:
+        entity:
+          domain: sensor
+
+    station_name:
+      name: Station name
+      description: Displayed in the departure notification title (e.g. Ivanhoe).
+      default: My Station
+      selector:
+        text:
+
+    # ── Notify service ───────────────────────────────────────────────────────
+    notify_service:
+      name: Notify service
+      description: >
+        The mobile_app notify service for your phone,
+        e.g. notify.mobile_app_andrews_iphone
+      selector:
+        text:
+
+    # ── Morning status notification ──────────────────────────────────────────
+    morning_time:
+      name: Morning status time
+      description: When to send the overall line status (e.g. 07:30).
+      default: "07:30:00"
+      selector:
+        time:
+
+    # ── Departure reminder notification ─────────────────────────────────────
+    departure_time:
+      name: Departure reminder time
+      description: When to send the next-trains list (e.g. 07:50, just before you leave).
+      default: "07:50:00"
+      selector:
+        time:
+
+    # ── Days of week ─────────────────────────────────────────────────────────
+    weekdays:
+      name: Active days
+      description: Which days to send notifications.
+      default:
+        - mon
+        - tue
+        - wed
+        - thu
+        - fri
+      selector:
+        select:
+          multiple: true
+          options:
+            - label: Monday
+              value: mon
+            - label: Tuesday
+              value: tue
+            - label: Wednesday
+              value: wed
+            - label: Thursday
+              value: thu
+            - label: Friday
+              value: fri
+            - label: Saturday
+              value: sat
+            - label: Sunday
+              value: sun
+
+# ── Triggers ────────────────────────────────────────────────────────────────
+trigger:
+  - id: morning_status
+    platform: time
+    at: !input morning_time
+
+  - id: departure_reminder
+    platform: time
+    at: !input departure_time
+
+# ── Day filter ───────────────────────────────────────────────────────────────
+condition:
+  - condition: time
+    weekday: !input weekdays
+
+# ── Actions ─────────────────────────────────────────────────────────────────
+variables:
+  problem_level_sensor: !input problem_level_sensor
+  problem_summary_sensor: !input problem_summary_sensor
+  train_1: !input train_1
+  train_2: !input train_2
+  train_3: !input train_3
+  train_4: !input train_4
+  station_name: !input station_name
+  notify_service: !input notify_service
+
+action:
+  - choose:
+
+      # ── Morning status ────────────────────────────────────────────────────
+      - conditions:
+          - condition: trigger
+            id: morning_status
+        sequence:
+          - service: "{{ notify_service }}"
+            data:
+              title: >
+                {% set level = states(problem_level_sensor) %}
+                {% if level == 'major' %}🚨 Major Disruption
+                {% elif level == 'cancellations' %}🚫 Trains Cancelled
+                {% elif level == 'alert' %}⚠️ Service Alert
+                {% elif level == 'delays' %}⏱️ Delays on Your Line
+                {% else %}✅ Your Line is On Time
+                {% endif %}
+              message: >
+                {{ states(problem_summary_sensor) }}
+
+      # ── Departure reminder ────────────────────────────────────────────────
+      - conditions:
+          - condition: trigger
+            id: departure_reminder
+        sequence:
+          - service: "{{ notify_service }}"
+            data:
+              title: >
+                {% set level = states(problem_level_sensor) %}
+                {% if level == 'major' %}🚨 Disruption – Next trains from {{ station_name }}
+                {% elif level == 'cancellations' %}🚫 Cancellations – Next trains from {{ station_name }}
+                {% elif level == 'alert' %}⚠️ Alert – Next trains from {{ station_name }}
+                {% elif level == 'delays' %}⏱️ Delays – Next trains from {{ station_name }}
+                {% else %}🚆 Next trains from {{ station_name }}
+                {% endif %}
+              message: >
+                {% set level = states(problem_level_sensor) %}
+                {% if level != 'none' %}
+                {{ states(problem_summary_sensor) }}
+
+                {% endif %}
+                1. {{ state_attr(train_1, 'formatted') }}
+                2. {{ state_attr(train_2, 'formatted') }}
+                3. {{ state_attr(train_3, 'formatted') }}
+                4. {{ state_attr(train_4, 'formatted') }}
+              data:
+                actions:
+                  - action: URI
+                    title: Open PTV App
+                    uri: https://www.ptv.vic.gov.au
