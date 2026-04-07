@@ -24,6 +24,26 @@ CONF_API_KEY = "api_key"
 CONF_LINES = "lines"
 CONF_SCAN_INTERVAL = "scan_interval"
 CONF_STATIONS = "stations"          # list of station config dicts
+CONF_ALERT_EFFECTS = "alert_effects"  # list of GTFS effect int values (as strings) to include
+
+# GTFS alert effect values → human-readable labels
+# Value 0 = unknown/unset; 1-11 match the GTFS spec
+ALERT_EFFECT_OPTIONS = {
+    "1":  "No service",
+    "2":  "Reduced service",
+    "3":  "Significant delays",
+    "4":  "Detour",
+    "5":  "Additional service",
+    "6":  "Modified service",
+    "7":  "Other effect",
+    "8":  "Unknown effect",
+    "9":  "Stop moved",
+    "10": "No effect",
+    "11": "Accessibility issue",
+}
+
+# Default: include meaningful service disruptions only (excludes "Other", "Unknown", "No effect")
+DEFAULT_ALERT_EFFECTS = ["1", "2", "3", "4", "6"]
 
 # Per-station config keys
 CONF_STATION_NAME = "name"

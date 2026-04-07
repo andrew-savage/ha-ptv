@@ -21,6 +21,7 @@ from .const import (
     API_BASE_URL, API_HEADER_KEY, API_TRIP_UPDATES_PATH,
     CONF_API_KEY, CONF_LINES, CONF_SCAN_INTERVAL, CONF_STATIONS,
     CONF_STATION_NAME, CONF_STATION_DIRECTIONS, CONF_STATION_COUNT,
+    CONF_ALERT_EFFECTS, ALERT_EFFECT_OPTIONS, DEFAULT_ALERT_EFFECTS,
     DEFAULT_SCAN_INTERVAL, DEFAULT_STATION_COUNT,
     DIR_CITYBOUND, DIR_OUTBOUND, DIR_BOTH,
     DOMAIN, METRO_LINES,
@@ -61,6 +62,7 @@ class PTVTrainDelaysConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._api_key = ""
         self._lines = []
         self._scan_interval = DEFAULT_SCAN_INTERVAL
+        self._alert_effects = DEFAULT_ALERT_EFFECTS
         self._stations: list[dict] = []
         self._gtfs_cache: dict = {}
         self._station_names: list[str] = []
@@ -100,7 +102,7 @@ class PTVTrainDelaysConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             else:
                 self._lines = selected
                 self._scan_interval = int(user_input.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL))
-                return await self.async_step_station()
+                return await self.async_step_alerts()
 
         return self.async_show_form(
             step_id="lines",
@@ -110,6 +112,38 @@ class PTVTrainDelaysConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 ),
                 vol.Optional(CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL): NumberSelector(
                     NumberSelectorConfig(min=30, max=300, step=10, mode=NumberSelectorMode.BOX, unit_of_measurement="seconds")
+                ),
+            }),
+            errors=errors,
+        )
+
+    async def async_step_alerts(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+        """Choose which service alert effect types to include."""
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            selected = user_input.get(CONF_ALERT_EFFECTS, [])
+            if isinstance(selected, str):
+                selected = [selected]
+            if not selected:
+                errors[CONF_ALERT_EFFECTS] = "no_alerts_selected"
+            else:
+                self._alert_effects = selected
+                return await self.async_step_station()
+
+        effect_options = [
+            {"value": k, "label": v} for k, v in ALERT_EFFECT_OPTIONS.items()
+        ]
+
+        return self.async_show_form(
+            step_id="alerts",
+            data_schema=vol.Schema({
+                vol.Required(CONF_ALERT_EFFECTS, default=list(DEFAULT_ALERT_EFFECTS)): SelectSelector(
+                    SelectSelectorConfig(
+                        options=effect_options,
+                        multiple=True,
+                        mode=SelectSelectorMode.LIST,
+                    )
                 ),
             }),
             errors=errors,
@@ -156,6 +190,7 @@ class PTVTrainDelaysConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         CONF_API_KEY: self._api_key,
                         CONF_LINES: self._lines,
                         CONF_SCAN_INTERVAL: self._scan_interval,
+                        CONF_ALERT_EFFECTS: self._alert_effects,
                         CONF_STATIONS: self._stations,
                     },
                 )

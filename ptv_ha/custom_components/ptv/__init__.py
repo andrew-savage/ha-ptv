@@ -16,6 +16,7 @@ from .const import (
     API_SERVICE_ALERTS_PATH, API_TRIP_UPDATES_PATH, API_VEHICLE_POSITIONS_PATH,
     CONF_API_KEY, CONF_LINES, CONF_SCAN_INTERVAL, CONF_STATIONS,
     CONF_STATION_NAME, CONF_STATION_DIRECTIONS, CONF_STATION_COUNT,
+    CONF_ALERT_EFFECTS, DEFAULT_ALERT_EFFECTS,
     DEFAULT_DELAY_THRESHOLD, DEFAULT_SCAN_INTERVAL, DEFAULT_STATION_COUNT,
     DIR_CITYBOUND, DIR_OUTBOUND, DIR_BOTH,
     DOMAIN, KNOWN_STOP_IDS, METRO_LINES, OCCUPANCY_LABELS,
@@ -31,6 +32,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     api_key = entry.data[CONF_API_KEY]
     monitored_lines = entry.data[CONF_LINES]
     scan_interval = entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
+    alert_effects = set(int(e) for e in entry.data.get(CONF_ALERT_EFFECTS, DEFAULT_ALERT_EFFECTS))
     stations_config = entry.data.get(CONF_STATIONS, [])
 
     route_ids = {METRO_LINES[l] for l in monitored_lines if l in METRO_LINES}
@@ -74,6 +76,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         api_key=api_key,
         monitored_lines=monitored_lines,
         scan_interval=scan_interval,
+        alert_effects=alert_effects,
         stations_config=stations_config,
         station_stop_ids=station_stop_ids,
         gtfs_cache=gtfs_cache,
@@ -95,9 +98,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 class PTVDataCoordinator(DataUpdateCoordinator):
 
     def __init__(self, hass, api_key, monitored_lines, scan_interval,
-                 stations_config, station_stop_ids, gtfs_cache):
+                 alert_effects, stations_config, station_stop_ids, gtfs_cache):
         self.api_key = api_key
         self.monitored_lines = monitored_lines
+        self.alert_effects = alert_effects        # set of int effect values to include
         self.stations_config = stations_config   # list of {name, directions, count}
         self.station_stop_ids = station_stop_ids  # key -> {stop_ids, citybound_stop_ids, outbound_stop_ids}
         self.gtfs_cache = gtfs_cache
@@ -384,6 +388,9 @@ class PTVDataCoordinator(DataUpdateCoordinator):
                 for p in alert.active_period
             )
             if not active:
+                continue
+
+            if alert.effect not in self.alert_effects:
                 continue
 
             def best_text(t):
