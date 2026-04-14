@@ -1,3 +1,9 @@
+<p align="center">
+  <img src="custom_components/ptv/home_assistant_ptv_logo.png" alt="PTV Home Assistant Integration" width="600">
+</p>
+
+> **AI Disclosure:** This project was written entirely by [Claude](https://claude.ai) (Anthropic), with direction and testing by a human. No code, configuration, or documentation was manually authored.
+
 # PTV – Home Assistant Integration
 
 A Home Assistant custom integration for **Public Transport Victoria (PTV)** metro train services. Provides real-time delays, cancellations, service alerts, vehicle positions, and scheduled departure times for any Melbourne Metro station.
@@ -71,15 +77,38 @@ Copy `custom_components/ptv/` into your HA `config/custom_components/` directory
 
 ## Setup
 
-The config flow has three steps:
+The config flow has four steps:
 
 1. **API Key** — paste your Transport Victoria portal key
-2. **Lines** — select which Melbourne Metro lines to monitor (multi-select)
-3. **Stations** — add stations one at a time. For each station choose:
+2. **Lines** — select which Melbourne Metro lines to monitor (multi-select), and set the polling interval (default 60 seconds)
+3. **Service Alert Filters** — choose which alert types trigger your sensors. The recommended defaults include meaningful disruptions (no service, reduced service, significant delays, detour, modified service) and exclude noise like car park closures and informational notices. You can adjust this to taste:
+   - **Include:** No service, Reduced service, Significant delays, Detour, Modified service
+   - **Exclude by default:** Other effect (car parks, lift outages), No effect (informational only), Unknown effect, Stop moved, Accessibility issue, Additional service
+4. **Stations** — add stations one at a time. For each station choose:
    - Station name (searchable dropdown of all network stations)
    - Directions: Both / Citybound only / Outbound only
    - Count: 1–4 upcoming trains to track
    - Select "(Done — no more stations)" when finished
+
+## Automation Blueprint
+
+A ready-to-use blueprint is included at `blueprints/ptv_commute_notifications.yaml`. Import it into Home Assistant and configure:
+
+| Input | Description |
+|-------|-------------|
+| Line problem level sensor | `sensor.ptv_<line>_line_problem_level` |
+| Line problem summary sensor | `sensor.ptv_<line>_line_problem_summary` |
+| Next trains 1–4 | `sensor.ptv_<line>_<station>_citybound_1` through `_4` |
+| Station name | Displayed in the notification title |
+| Notify service | e.g. `notify.mobile_app_your_phone` |
+| Morning status time | When to send the line status (e.g. 07:30) |
+| Departure reminder time | When to send the next-trains list (e.g. 07:50) |
+| Active days | Which days of the week to fire |
+
+The blueprint sends two notifications daily:
+
+- **Morning status** — fires at your chosen time with an emoji-coded title (✅ on time / ⏱️ delays / ⚠️ alert / 🚫 cancelled / 🚨 major) and a plain-English summary sentence
+- **Departure reminder** — fires closer to when you leave, listing the next 4 trains with times and delay info. If there's an active disruption the summary is prepended so you always have context. Includes a tap action to open the PTV website.
 
 ## Example automation
 

@@ -13,6 +13,13 @@
           "scan_interval": "Polling interval (seconds)"
         }
       },
+      "alerts": {
+        "title": "PTV – Service Alert Filters",
+        "description": "Select which alert types should trigger your PTV sensors. Checked types will count as active alerts. Uncheck 'Other effect' and 'No effect' to ignore car park notices and informational updates.",
+        "data": {
+          "alert_effects": "Include alerts of these types"
+        }
+      },
       "station": {
         "title": "PTV – Add Station{added}",
         "description": "Add a station on {lines} to monitor. Select '(No more stations)' when done.",
@@ -27,6 +34,7 @@
       "cannot_connect": "Unable to reach the PTV API.",
       "invalid_auth": "API key rejected.",
       "no_lines_selected": "Select at least one line.",
+      "no_alerts_selected": "Select at least one alert type.",
       "unknown": "Unexpected error."
     },
     "abort": {"already_configured": "PTV is already configured."}
