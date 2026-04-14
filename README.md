@@ -2,7 +2,8 @@
   <img src="custom_components/ptv/home_assistant_ptv_logo.png" alt="PTV Home Assistant Integration" width="600">
 </p>
 
-> **AI Disclosure:** This project was written entirely by [Claude](https://claude.ai) (Anthropic), with direction and testing by a human. No code, configuration, or documentation was manually authored.
+> **AI Disclosure:** This project was written entirely by AI. It has been tested on multiple HA installs. 
+
 
 # PTV – Home Assistant Integration
 
