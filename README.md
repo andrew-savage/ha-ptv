@@ -67,7 +67,7 @@ Each sensor has attributes: `formatted`, `delay_minutes`, `on_time`, `is_realtim
 ### HACS (recommended)
 
 1. In Home Assistant go to **HACS → Integrations → ⋮ → Custom repositories**
-2. Add `https://github.com/your-username/ha-ptv`, category **Integration**
+2. Add `https://github.com/andrew-savage/ha-ptv`, category **Integration**
 3. Click **Download**, restart Home Assistant
 4. Go to **Settings → Devices & Services → Add Integration → PTV**
 
