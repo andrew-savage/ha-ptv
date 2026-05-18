@@ -140,25 +140,41 @@ def download_and_cache_gtfs(
     cache_path = Path(config_dir) / GTFS_CACHE_FILE
     today_str = datetime.now().astimezone().strftime("%Y%m%d")
 
+    stale_cache: dict | None = None
+
     if cache_path.exists():
         try:
             with open(cache_path) as f:
                 cache = json.load(f)
             cached_at = datetime.fromisoformat(cache.get("cached_at","2000-01-01"))
             age_days = (datetime.now(timezone.utc) - cached_at.replace(tzinfo=timezone.utc)).days
-            # Invalidate if stale OR if it's a new day (timetable changes)
+            # Return immediately if cache is fresh and covers all stations
             if age_days < GTFS_CACHE_TTL_DAYS and cache.get("cached_date") == today_str:
-                # Also check all requested stations are cached
                 cached_stations = set(cache.get("scheduled_by_station", {}).keys())
                 if all(s.lower() in cached_stations for s in station_names):
                     _LOGGER.debug("Using cached GTFS data (age %d days)", age_days)
                     return cache
+            # Keep stale cache as a fallback in case the download fails
+            stale_cache = cache
         except Exception as err:
             _LOGGER.warning("Could not read GTFS cache: %s", err)
 
     _LOGGER.info("Downloading GTFS static schedule...")
-    resp = requests.get(GTFS_STATIC_URL, timeout=180)
-    resp.raise_for_status()
+    try:
+        resp = requests.get(
+            GTFS_STATIC_URL,
+            timeout=180,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; HomeAssistant/PTV)"},
+        )
+        resp.raise_for_status()
+    except Exception as err:
+        if stale_cache:
+            _LOGGER.warning(
+                "GTFS download failed (%s) — using stale cache from %s as fallback",
+                err, stale_cache.get("cached_date","unknown"),
+            )
+            return stale_cache
+        raise
     _LOGGER.info("Downloaded %d KB", len(resp.content)//1024)
 
     outer = zipfile.ZipFile(io.BytesIO(resp.content))
