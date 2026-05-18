@@ -309,7 +309,7 @@ class PTVUpcomingTrainSensor(CoordinatorEntity, SensorEntity):
         dir_label = "Citybound" if direction == "citybound" else "Outbound"
 
         self._attr_unique_id = f"ptv_{slug_line}_{slug_st}_{direction}_{index}"
-        self._attr_name = f"PTV {line} {station} {dir_label} {index}"
+        self._attr_name = f"PTV {line} Line {station} {dir_label} {index}"
 
     @property
     def _entry(self) -> dict | None:

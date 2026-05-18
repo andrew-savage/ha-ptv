@@ -2,46 +2,44 @@
 # PTV Hurstbridge – Lovelace Dashboard Card
 # ============================================================
 # Paste this into your dashboard via Edit → Add Card → Manual
-# Update station names below if yours differ from Ivanhoe.
 # ============================================================
 
 type: markdown
-content: >
+content: >-
   ## Hurstbridge Line
+
   {% set level = states('sensor.ptv_hurstbridge_line_problem_level') %}
-  {% if level == 'major' %}
-  > 🚨 **Major disruption** — {{ states('sensor.ptv_hurstbridge_line_problem_summary') }}
-  {% elif level == 'cancellations' %}
-  > 🚫 **Cancellations** — {{ states('sensor.ptv_hurstbridge_line_problem_summary') }}
-  {% elif level == 'alert' %}
-  > ⚠️ **Alert** — {{ states('sensor.ptv_hurstbridge_line_alert') }}
-  {% elif level == 'delays' %}
-  > ⏱️ **Delays** — up to {{ states('sensor.ptv_hurstbridge_line_max_delay') }} min
-  {% else %}
-  > ✅ Running normally
+  {% if level == 'major' %}> 🚨 **Major disruption** — {{ states('sensor.ptv_hurstbridge_line_problem_summary') }}
+  {% elif level == 'cancellations' %}> 🚫 **Cancellations** — {{ states('sensor.ptv_hurstbridge_line_problem_summary') }}
+  {% elif level == 'alert' %}> ⚠️ **Alert** — {{ states('sensor.ptv_hurstbridge_line_alert') }}
+  {% elif level == 'delays' %}> ⏱️ **Delays** — up to {{ states('sensor.ptv_hurstbridge_line_max_delay') }} min
+  {% else %}> ✅ Running normally
   {% endif %}
 
   ---
 
-  **Active trains:** {{ states('sensor.ptv_hurstbridge_line_active_trains') }} &nbsp;|&nbsp;
-  **Occupancy:** {{ states('sensor.ptv_hurstbridge_line_occupancy') }}
+  **Active trains:** {{ states('sensor.ptv_hurstbridge_line_active_trains') }} &nbsp;|&nbsp; **Occupancy:** {{ states('sensor.ptv_hurstbridge_line_occupancy') }}
 
   ---
 
   ### Ivanhoe → City
+
   | # | Time | Status |
   |---|------|--------|
-  {% for i in [1,2,3,4] %}
-  {% set s = 'sensor.ptv_hurstbridge_ivanhoe_citybound_' ~ i %}
-  | {{ i }} | {{ state_attr(s, 'formatted') or 'Unknown' }} | {{ '🔴' if (state_attr(s, 'delay_minutes') | float(0)) > 2 else ('🟢' if state_attr(s, 'is_realtime') else '⚪') }} |
-  {% endfor %}
+  | 1 | {{ state_attr('sensor.ptv_hurstbridge_line_ptv_hurstbridge_ivanhoe_citybound_1', 'formatted') or '—' }} | {{ '🔴' if (state_attr('sensor.ptv_hurstbridge_line_ptv_hurstbridge_ivanhoe_citybound_1', 'delay_minutes') | float(0)) > 2 else ('🟢' if state_attr('sensor.ptv_hurstbridge_line_ptv_hurstbridge_ivanhoe_citybound_1', 'is_realtime') else '⚪') }} |
+  | 2 | {{ state_attr('sensor.ptv_hurstbridge_line_ptv_hurstbridge_ivanhoe_citybound_2', 'formatted') or '—' }} | {{ '🔴' if (state_attr('sensor.ptv_hurstbridge_line_ptv_hurstbridge_ivanhoe_citybound_2', 'delay_minutes') | float(0)) > 2 else ('🟢' if state_attr('sensor.ptv_hurstbridge_line_ptv_hurstbridge_ivanhoe_citybound_2', 'is_realtime') else '⚪') }} |
+  | 3 | {{ state_attr('sensor.ptv_hurstbridge_line_ptv_hurstbridge_ivanhoe_citybound_3', 'formatted') or '—' }} | {{ '🔴' if (state_attr('sensor.ptv_hurstbridge_line_ptv_hurstbridge_ivanhoe_citybound_3', 'delay_minutes') | float(0)) > 2 else ('🟢' if state_attr('sensor.ptv_hurstbridge_line_ptv_hurstbridge_ivanhoe_citybound_3', 'is_realtime') else '⚪') }} |
+  | 4 | {{ state_attr('sensor.ptv_hurstbridge_line_ptv_hurstbridge_ivanhoe_citybound_4', 'formatted') or '—' }} | {{ '🔴' if (state_attr('sensor.ptv_hurstbridge_line_ptv_hurstbridge_ivanhoe_citybound_4', 'delay_minutes') | float(0)) > 2 else ('🟢' if state_attr('sensor.ptv_hurstbridge_line_ptv_hurstbridge_ivanhoe_citybound_4', 'is_realtime') else '⚪') }} |
 
   🟢 live &nbsp; ⚪ scheduled &nbsp; 🔴 delayed
 
-  ### Ivanhoe → Hurstbridge
+  ### Melbourne Central → Ivanhoe
+
   | # | Time | Status |
   |---|------|--------|
-  {% for i in [1,2,3,4] %}
-  {% set s = 'sensor.ptv_hurstbridge_ivanhoe_outbound_' ~ i %}
-  | {{ i }} | {{ state_attr(s, 'formatted') or 'Unknown' }} | {{ '🔴' if (state_attr(s, 'delay_minutes') | float(0)) > 2 else ('🟢' if state_attr(s, 'is_realtime') else '⚪') }} |
-  {% endfor %}
+  | 1 | {{ state_attr('sensor.ptv_hurstbridge_line_ptv_hurstbridge_melbourne_central_outbound_1', 'formatted') or '—' }} | {{ '🔴' if (state_attr('sensor.ptv_hurstbridge_line_ptv_hurstbridge_melbourne_central_outbound_1', 'delay_minutes') | float(0)) > 2 else ('🟢' if state_attr('sensor.ptv_hurstbridge_line_ptv_hurstbridge_melbourne_central_outbound_1', 'is_realtime') else '⚪') }} |
+  | 2 | {{ state_attr('sensor.ptv_hurstbridge_line_ptv_hurstbridge_melbourne_central_outbound_2', 'formatted') or '—' }} | {{ '🔴' if (state_attr('sensor.ptv_hurstbridge_line_ptv_hurstbridge_melbourne_central_outbound_2', 'delay_minutes') | float(0)) > 2 else ('🟢' if state_attr('sensor.ptv_hurstbridge_line_ptv_hurstbridge_melbourne_central_outbound_2', 'is_realtime') else '⚪') }} |
+  | 3 | {{ state_attr('sensor.ptv_hurstbridge_line_ptv_hurstbridge_melbourne_central_outbound_3', 'formatted') or '—' }} | {{ '🔴' if (state_attr('sensor.ptv_hurstbridge_line_ptv_hurstbridge_melbourne_central_outbound_3', 'delay_minutes') | float(0)) > 2 else ('🟢' if state_attr('sensor.ptv_hurstbridge_line_ptv_hurstbridge_melbourne_central_outbound_3', 'is_realtime') else '⚪') }} |
+  | 4 | {{ state_attr('sensor.ptv_hurstbridge_line_ptv_hurstbridge_melbourne_central_outbound_4', 'formatted') or '—' }} | {{ '🔴' if (state_attr('sensor.ptv_hurstbridge_line_ptv_hurstbridge_melbourne_central_outbound_4', 'delay_minutes') | float(0)) > 2 else ('🟢' if state_attr('sensor.ptv_hurstbridge_line_ptv_hurstbridge_melbourne_central_outbound_4', 'is_realtime') else '⚪') }} |
+
+  🟢 live &nbsp; ⚪ scheduled &nbsp; 🔴 delayed
