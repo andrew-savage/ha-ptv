@@ -101,10 +101,13 @@ def _load_scheduled_departures(
                     active_sids.discard(row["service_id"])
 
     # Trip -> direction
+    # Prefix match so route ID variants (e.g. "aus:vic:vic-02-HBE:E" express)
+    # are included; base IDs end with ":" so "-R:" replacement buses never match.
+    route_prefixes = tuple(route_ids)
     trip_dirs: dict[str, int] = {}
     with metro_z.open("trips.txt") as f:
         for row in csv.DictReader(io.TextIOWrapper(f, encoding="utf-8-sig")):
-            if row.get("route_id") in route_ids and row.get("service_id") in active_sids:
+            if row.get("route_id", "").startswith(route_prefixes) and row.get("service_id") in active_sids:
                 trip_dirs[row["trip_id"]] = int(row.get("direction_id", 0))
 
     # Departures at our stops

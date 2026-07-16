@@ -229,10 +229,15 @@ class PTVDataCoordinator(DataUpdateCoordinator):
                 continue
             tu = entity.trip_update
             route_id = tu.trip.route_id
-            if route_id not in route_map:
+            line = route_map.get(route_id)
+            if line is None:
+                # Also match route ID variants e.g. "aus:vic:vic-02-HBE:E" (express)
+                for base_id, lname in route_map.items():
+                    if route_id.startswith(base_id):
+                        line = lname
+                        break
+            if line is None:
                 continue
-
-            line = route_map[route_id]
             data = results[line]
             trip_id = tu.trip.trip_id
             direction_id = tu.trip.direction_id
@@ -408,9 +413,14 @@ class PTVDataCoordinator(DataUpdateCoordinator):
 
             matched: set[str] = set()
             for informed in alert.informed_entity:
-                if informed.route_id in route_map:
-                    matched.add(route_map[informed.route_id])
-                elif not informed.route_id and not informed.trip.trip_id:
+                rid = informed.route_id
+                if rid in route_map:
+                    matched.add(route_map[rid])
+                elif rid:
+                    for base_id, lname in route_map.items():
+                        if rid.startswith(base_id):
+                            matched.add(lname)
+                elif not informed.trip.trip_id:
                     matched.update(self.monitored_lines)
 
             for line in matched:
@@ -447,9 +457,15 @@ class PTVDataCoordinator(DataUpdateCoordinator):
             if not entity.HasField("vehicle"):
                 continue
             vp = entity.vehicle
-            if vp.trip.route_id not in route_map:
+            rid = vp.trip.route_id
+            line = route_map.get(rid)
+            if line is None:
+                for base_id, lname in route_map.items():
+                    if rid.startswith(base_id):
+                        line = lname
+                        break
+            if line is None:
                 continue
-            line = route_map[vp.trip.route_id]
             counts[line] += 1
             if vp.occupancy_status > worst[line]:
                 worst[line] = vp.occupancy_status
