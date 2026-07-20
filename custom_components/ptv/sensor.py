@@ -71,15 +71,16 @@ def _device(line):
         "model": "GTFS Realtime",
     }
 
-def _fmt(iso: str | None, delay_sec: int, is_realtime: bool) -> str:
+def _fmt(iso: str | None, delay_sec: int, is_realtime: bool, is_express: bool = False) -> str:
     if not iso:
         return "Unknown"
     try:
         dep = datetime.fromisoformat(iso).astimezone()
         time_str = dep.strftime("%-I:%M %p")
+        suffix = " · Express" if is_express else ""
         if delay_sec >= 60:
-            return f"{time_str} ({round(delay_sec/60)} min late)"
-        return f"{time_str} ({'on time' if is_realtime else 'scheduled'})"
+            return f"{time_str} ({round(delay_sec/60)} min late){suffix}"
+        return f"{time_str} ({'on time' if is_realtime else 'scheduled'}){suffix}"
     except Exception:
         return "Unknown"
 
@@ -139,7 +140,7 @@ class PTVStatusSensor(CoordinatorEntity, SensorEntity):
             cb = first_station.get("citybound", [])
             if cb:
                 dep = cb[0]
-                parts.append(_fmt(dep["dt_iso"], dep["delay_sec"], dep["is_realtime"]))
+                parts.append(_fmt(dep["dt_iso"], dep["delay_sec"], dep["is_realtime"], dep.get("is_express", False)))
         if not parts:
             return f"{self._line} line running normally"
         return f"{self._line}: " + "; ".join(parts)
@@ -342,8 +343,9 @@ class PTVUpcomingTrainSensor(CoordinatorEntity, SensorEntity):
             "delay_minutes": round(delay_sec / 60, 1),
             "on_time": delay_sec < 60,
             "is_realtime": is_rt,
+            "is_express": entry.get("is_express", False),
             "source": "realtime" if is_rt else "scheduled",
-            "formatted": _fmt(entry["dt_iso"], delay_sec, is_rt),
+            "formatted": _fmt(entry["dt_iso"], delay_sec, is_rt, entry.get("is_express", False)),
         }
 
     @property

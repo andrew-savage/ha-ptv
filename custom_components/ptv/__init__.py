@@ -230,11 +230,13 @@ class PTVDataCoordinator(DataUpdateCoordinator):
             tu = entity.trip_update
             route_id = tu.trip.route_id
             line = route_map.get(route_id)
+            is_express = False
             if line is None:
                 # Also match route ID variants e.g. "aus:vic:vic-02-HBE:E" (express)
                 for base_id, lname in route_map.items():
                     if route_id.startswith(base_id):
                         line = lname
+                        is_express = True
                         break
             if line is None:
                 continue
@@ -282,7 +284,11 @@ class PTVDataCoordinator(DataUpdateCoordinator):
                         else:
                             stop_ids = set(info.get("outbound_stop_ids", info.get("stop_ids", [])))
                         if stu.stop_id in stop_ids:
-                            station_hits[key] = {"actual": dep_time, "delay_sec": delay}
+                            station_hits[key] = {
+                                "actual": dep_time,
+                                "delay_sec": delay,
+                                "is_express": is_express,
+                            }
 
             # Record station hits into buckets
             for key, hit in station_hits.items():
@@ -308,6 +314,7 @@ class PTVDataCoordinator(DataUpdateCoordinator):
                             "dt_iso": h["actual"].isoformat(),
                             "delay_sec": h["delay_sec"],
                             "is_realtime": True,
+                            "is_express": h["is_express"],
                         }
                         for h in hits[:count]
                     ]
@@ -360,6 +367,7 @@ class PTVDataCoordinator(DataUpdateCoordinator):
                             "dt_iso": dt.isoformat(),
                             "delay_sec": 0,
                             "is_realtime": False,
+                            "is_express": False,  # not derivable from static schedule
                         })
 
     # ------------------------------------------------------------------ #
