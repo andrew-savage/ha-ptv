@@ -17,6 +17,7 @@ GTFS_STATIC_URL = (
 )
 GTFS_CACHE_FILE = "ptv_gtfs_cache.json"
 GTFS_CACHE_TTL_DAYS = 3
+GTFS_DOWNLOAD_TIMEOUT = 420
 GTFS_METRO_INNER_ZIP = "2/google_transit.zip"
 
 # Config keys

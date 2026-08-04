@@ -35,6 +35,7 @@
       "invalid_auth": "API key rejected.",
       "no_lines_selected": "Select at least one line.",
       "no_alerts_selected": "Select at least one alert type.",
+      "station_list_unavailable": "Could not download the station list from Transport Victoria (the schedule file is large and the download may have timed out). Type your station name in manually, or go back and retry.",
       "unknown": "Unexpected error."
     },
     "abort": {"already_configured": "PTV is already configured."}

@@ -14,6 +14,7 @@ import requests
 from .const import (
     GTFS_CACHE_FILE,
     GTFS_CACHE_TTL_DAYS,
+    GTFS_DOWNLOAD_TIMEOUT,
     GTFS_METRO_INNER_ZIP,
     GTFS_STATIC_URL,
     METRO_LINES,
@@ -69,6 +70,11 @@ def _load_stops(metro_z: zipfile.ZipFile) -> dict[str, dict]:
                 .replace(" Station","")
                 .split("(")[0].strip()
             )
+            # A few rows carry the platform number as the stop name instead of
+            # the station's (e.g. Berwick stops 27882/27883, named "1" and "2").
+            # They never appear in stop_times, so drop them.
+            if not clean or clean.isdigit():
+                continue
             key = clean.lower()
             if key not in grouped:
                 grouped[key] = {"stop_name": clean, "stop_ids": [sid]}
@@ -166,7 +172,9 @@ def download_and_cache_gtfs(
     try:
         resp = requests.get(
             GTFS_STATIC_URL,
-            timeout=180,
+            # ~280 MB; 180s needs a sustained 12 Mbit/s, which times out on
+            # slower connections and leaves setup with no station list.
+            timeout=GTFS_DOWNLOAD_TIMEOUT,
             headers={"User-Agent": "Mozilla/5.0 (compatible; HomeAssistant/PTV)"},
         )
         resp.raise_for_status()

@@ -167,9 +167,14 @@ class PTVTrainDelaysConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             except Exception as err:
                 _LOGGER.warning("Could not load station names: %s", err)
                 self._station_names = []
+            if not self._station_names:
+                # Never substitute a placeholder list here — it looks like the
+                # real station list and hides the failure. custom_value=True
+                # still lets the station be typed in by hand.
+                errors["base"] = "station_list_unavailable"
 
         # "(done)" sentinel at top; rest sorted alphabetically via sort=True in selector
-        options = ["(Done — no more stations)"] + (self._station_names or ["Ivanhoe", "Melbourne Central"])
+        options = ["(Done — no more stations)"] + self._station_names
 
         if user_input is not None:
             station = user_input.get(CONF_STATION_NAME, "").strip()
