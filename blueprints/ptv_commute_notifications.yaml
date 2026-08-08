@@ -12,6 +12,10 @@ blueprint:
 
     Both notifications are sent to a mobile app notify service and include
     emoji status indicators. Only runs on selected weekdays.
+
+    Planned overnight works are reported separately under a "🌙 Tonight"
+    line, with the hours they actually run, rather than being treated as a
+    disruption happening right now. Requires PTV integration 0.1.4 or newer.
   domain: automation
   source_url: https://github.com/andrew-savage/ha-ptv
 
@@ -71,6 +75,19 @@ blueprint:
       default: My Station
       selector:
         text:
+
+    # ── Overnight works ──────────────────────────────────────────────────────
+    mention_overnight_works:
+      name: Mention tonight's planned works
+      description: >
+        PTV publishes overnight works (e.g. "buses replace trains 11.50pm to
+        last service") as active for the whole multi-day campaign, so they
+        would otherwise be reported all day. When on, they appear as a
+        separate "Tonight" line rather than as a current disruption. Turn off
+        to leave them out of the notifications entirely.
+      default: true
+      selector:
+        boolean:
 
     # ── Notify service ───────────────────────────────────────────────────────
     notify_service:
@@ -151,6 +168,14 @@ variables:
   train_4: !input train_4
   station_name: !input station_name
   notify_service: !input notify_service
+  mention_overnight_works: !input mention_overnight_works
+  # problem_level already ignores works that haven't started, so the title
+  # reflects the line's actual state right now.
+  live_summary: >
+    {{ state_attr(problem_summary_sensor, 'live_summary')
+       or states(problem_summary_sensor) }}
+  overnight_works: >
+    {{ state_attr(problem_summary_sensor, 'overnight_works') or '' }}
 
 action:
   - choose:
@@ -170,8 +195,12 @@ action:
                 {% elif level == 'delays' %}⏱️ Delays on Your Line
                 {% else %}✅ Your Line is On Time
                 {% endif %}
-              message: >
-                {{ states(problem_summary_sensor) }}
+              message: >-
+                {%- set parts = [live_summary] -%}
+                {%- if mention_overnight_works and overnight_works -%}
+                  {%- set parts = parts + ['', '🌙 Tonight: ' ~ overnight_works] -%}
+                {%- endif -%}
+                {{ parts | join('\n') }}
 
       # ── Departure reminder ────────────────────────────────────────────────
       - conditions:
@@ -188,16 +217,20 @@ action:
                 {% elif level == 'delays' %}⏱️ Delays – Next trains from {{ station_name }}
                 {% else %}🚆 Next trains from {{ station_name }}
                 {% endif %}
-              message: >
-                {% set level = states(problem_level_sensor) %}
-                {% if level != 'none' %}
-                {{ states(problem_summary_sensor) }}
-
-                {% endif %}
-                1. {{ state_attr(train_1, 'formatted') }}
-                2. {{ state_attr(train_2, 'formatted') }}
-                3. {{ state_attr(train_3, 'formatted') }}
-                4. {{ state_attr(train_4, 'formatted') }}
+              message: >-
+                {%- set parts = [] -%}
+                {%- if states(problem_level_sensor) != 'none' -%}
+                  {%- set parts = parts + [live_summary, ''] -%}
+                {%- endif -%}
+                {%- set parts = parts + [
+                     '1. ' ~ state_attr(train_1, 'formatted'),
+                     '2. ' ~ state_attr(train_2, 'formatted'),
+                     '3. ' ~ state_attr(train_3, 'formatted'),
+                     '4. ' ~ state_attr(train_4, 'formatted')] -%}
+                {%- if mention_overnight_works and overnight_works -%}
+                  {%- set parts = parts + ['', '🌙 Tonight: ' ~ overnight_works] -%}
+                {%- endif -%}
+                {{ parts | join('\n') }}
               data:
                 actions:
                   - action: URI

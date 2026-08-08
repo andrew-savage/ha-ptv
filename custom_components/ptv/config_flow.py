@@ -8,11 +8,14 @@ import voluptuous as vol
 from google.transit import gtfs_realtime_pb2
 
 from homeassistant import config_entries
+from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers.selector import (
+    BooleanSelector,
     NumberSelector, NumberSelectorConfig, NumberSelectorMode,
     SelectSelector, SelectSelectorConfig, SelectSelectorMode,
     TextSelector, TextSelectorConfig, TextSelectorType,
+    TimeSelector,
 )
 
 # HA 2023.4+ supports SelectSelector with custom_value=True for searchable dropdowns
@@ -22,11 +25,19 @@ from .const import (
     CONF_API_KEY, CONF_LINES, CONF_SCAN_INTERVAL, CONF_STATIONS,
     CONF_STATION_NAME, CONF_STATION_DIRECTIONS, CONF_STATION_COUNT,
     CONF_ALERT_EFFECTS, ALERT_EFFECT_OPTIONS, DEFAULT_ALERT_EFFECTS,
+    CONF_MODE, DEFAULT_MODE, MODES, MODE_TRAM, mode_info, routes_for_mode,
+    CONF_OFFPEAK_INTERVAL, CONF_OVERNIGHT_INTERVAL,
+    CONF_PEAK_AM_START, CONF_PEAK_AM_END, CONF_PEAK_PM_START, CONF_PEAK_PM_END,
+    CONF_OVERNIGHT_START, CONF_OVERNIGHT_END, CONF_PEAK_ON_WEEKENDS,
+    DEFAULT_OFFPEAK_INTERVAL, DEFAULT_OVERNIGHT_INTERVAL,
+    DEFAULT_PEAK_AM_START, DEFAULT_PEAK_AM_END,
+    DEFAULT_PEAK_PM_START, DEFAULT_PEAK_PM_END,
+    DEFAULT_OVERNIGHT_START, DEFAULT_OVERNIGHT_END, DEFAULT_PEAK_ON_WEEKENDS,
     DEFAULT_SCAN_INTERVAL, DEFAULT_STATION_COUNT,
     DIR_CITYBOUND, DIR_OUTBOUND, DIR_BOTH,
     DOMAIN, METRO_LINES,
 )
-from .gtfs_static import download_and_cache_gtfs, get_all_station_names
+from .gtfs_static import download_and_cache_gtfs, get_all_station_names, get_direction_label
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -58,6 +69,11 @@ def _validate_api_key(api_key: str) -> str | None:
 class PTVTrainDelaysConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 1
 
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry) -> "PTVOptionsFlow":
+        return PTVOptionsFlow(config_entry)
+
     def __init__(self):
         self._api_key = ""
         self._lines = []
@@ -66,6 +82,7 @@ class PTVTrainDelaysConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._stations: list[dict] = []
         self._gtfs_cache: dict = {}
         self._station_names: list[str] = []
+        self._mode = DEFAULT_MODE
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         errors: dict[str, str] = {}
@@ -76,6 +93,7 @@ class PTVTrainDelaysConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors["base"] = error
             else:
                 self._api_key = api_key
+                self._mode = user_input.get(CONF_MODE, DEFAULT_MODE)
                 return await self.async_step_lines()
 
         return self.async_show_form(
@@ -84,14 +102,27 @@ class PTVTrainDelaysConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_API_KEY): TextSelector(
                     TextSelectorConfig(type=TextSelectorType.PASSWORD)
                 ),
+                vol.Required(CONF_MODE, default=DEFAULT_MODE): SelectSelector(
+                    SelectSelectorConfig(
+                        options=[{"value": m, "label": i["label"]} for m, i in MODES.items()],
+                        mode=SelectSelectorMode.LIST,
+                    )
+                ),
             }),
             errors=errors,
             description_placeholders={"portal_url": "https://opendata.transport.vic.gov.au"},
         )
 
+    def _route_options(self) -> list:
+        """Route picker entries, numerically ordered for tram route numbers."""
+        routes = routes_for_mode(self._mode)
+        if self._mode == MODE_TRAM:
+            return sorted(routes, key=lambda n: int(n.split()[-1]))
+        return sorted(routes)
+
     async def async_step_lines(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         errors: dict[str, str] = {}
-        sorted_lines = sorted(METRO_LINES.keys())
+        sorted_lines = self._route_options()
 
         if user_input is not None:
             selected = user_input.get(CONF_LINES, [])
@@ -149,19 +180,51 @@ class PTVTrainDelaysConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
+    def _direction_options(self) -> list:
+        """Direction picker entries.
+
+        Trains are citybound/outbound; trams have no such notion, so label each
+        direction with where it is headed (from the GTFS headsigns).
+        """
+        if self._mode != MODE_TRAM:
+            return [{"value": o["value"], "label": o["label"]} for o in DIRECTION_OPTIONS]
+
+        routes = routes_for_mode(self._mode)
+        dests: dict[str, list[str]] = {DIR_CITYBOUND: [], DIR_OUTBOUND: []}
+        for line in self._lines:
+            rid = routes.get(line)
+            if not rid:
+                continue
+            # direction_id 1 shares the citybound slot, 0 the outbound slot
+            for key, did in ((DIR_CITYBOUND, 1), (DIR_OUTBOUND, 0)):
+                label = get_direction_label(self._gtfs_cache, rid, did)
+                if label and label not in dests[key]:
+                    dests[key].append(label)
+
+        def label_for(key, fallback):
+            return f"Towards {' / '.join(dests[key])}" if dests[key] else fallback
+
+        return [
+            {"value": DIR_BOTH, "label": "Both directions"},
+            {"value": DIR_CITYBOUND, "label": label_for(DIR_CITYBOUND, "Direction 1")},
+            {"value": DIR_OUTBOUND, "label": label_for(DIR_OUTBOUND, "Direction 0")},
+        ]
+
     async def async_step_station(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Add a station (can be repeated)."""
         errors: dict[str, str] = {}
 
         # Load station names from GTFS if we haven't already
         if not self._station_names:
-            route_ids = {METRO_LINES[l] for l in self._lines if l in METRO_LINES}
+            routes = routes_for_mode(self._mode)
+            route_ids = {routes[l] for l in self._lines if l in routes}
             try:
                 self._gtfs_cache = await self.hass.async_add_executor_job(
                     download_and_cache_gtfs,
                     self.hass.config.config_dir,
                     [],   # no stations yet — just need the stops list
                     route_ids,
+                    self._mode,
                 )
                 self._station_names = get_all_station_names(self._gtfs_cache)
             except Exception as err:
@@ -190,9 +253,10 @@ class PTVTrainDelaysConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 # Done adding stations — save entry
                 station_list = ", ".join(s[CONF_STATION_NAME] for s in self._stations) if self._stations else "no station"
                 return self.async_create_entry(
-                    title=f"PTV – {', '.join(self._lines)}",
+                    title=f"PTV {mode_info(self._mode)['label']} – {', '.join(self._lines)}",
                     data={
                         CONF_API_KEY: self._api_key,
+                        CONF_MODE: self._mode,
                         CONF_LINES: self._lines,
                         CONF_SCAN_INTERVAL: self._scan_interval,
                         CONF_ALERT_EFFECTS: self._alert_effects,
@@ -214,7 +278,7 @@ class PTVTrainDelaysConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 ),
                 vol.Optional(CONF_STATION_DIRECTIONS, default=DIR_BOTH): SelectSelector(
                     SelectSelectorConfig(
-                        options=[o["value"] for o in DIRECTION_OPTIONS],
+                        options=self._direction_options(),
                         mode=SelectSelectorMode.DROPDOWN,
                     )
                 ),
@@ -227,4 +291,53 @@ class PTVTrainDelaysConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 "lines": ", ".join(self._lines),
                 "added": added,
             },
+        )
+
+
+class PTVOptionsFlow(config_entries.OptionsFlow):
+    """Adjust polling rates without re-adding the integration."""
+
+    def __init__(self, config_entry) -> None:
+        # Deliberately not `self.config_entry` — assigning that is deprecated
+        # in newer HA, where the framework supplies it.
+        self._entry = config_entry
+
+    def _current(self, key: str, default: Any) -> Any:
+        return self._entry.options.get(key, self._entry.data.get(key, default))
+
+    async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            if user_input[CONF_PEAK_AM_START] == user_input[CONF_PEAK_AM_END] or \
+                    user_input[CONF_PEAK_PM_START] == user_input[CONF_PEAK_PM_END]:
+                errors["base"] = "empty_peak_window"
+            else:
+                for key in (CONF_SCAN_INTERVAL, CONF_OFFPEAK_INTERVAL, CONF_OVERNIGHT_INTERVAL):
+                    user_input[key] = int(user_input[key])
+                return self.async_create_entry(title="", data=user_input)
+
+        def field(key, default):
+            return vol.Optional(key, default=self._current(key, default))
+
+        interval = NumberSelector(NumberSelectorConfig(
+            min=30, max=3600, step=10, mode=NumberSelectorMode.BOX,
+            unit_of_measurement="seconds",
+        ))
+
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema({
+                field(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL): interval,
+                field(CONF_OFFPEAK_INTERVAL, DEFAULT_OFFPEAK_INTERVAL): interval,
+                field(CONF_OVERNIGHT_INTERVAL, DEFAULT_OVERNIGHT_INTERVAL): interval,
+                field(CONF_PEAK_AM_START, DEFAULT_PEAK_AM_START): TimeSelector(),
+                field(CONF_PEAK_AM_END, DEFAULT_PEAK_AM_END): TimeSelector(),
+                field(CONF_PEAK_PM_START, DEFAULT_PEAK_PM_START): TimeSelector(),
+                field(CONF_PEAK_PM_END, DEFAULT_PEAK_PM_END): TimeSelector(),
+                field(CONF_OVERNIGHT_START, DEFAULT_OVERNIGHT_START): TimeSelector(),
+                field(CONF_OVERNIGHT_END, DEFAULT_OVERNIGHT_END): TimeSelector(),
+                field(CONF_PEAK_ON_WEEKENDS, DEFAULT_PEAK_ON_WEEKENDS): BooleanSelector(),
+            }),
+            errors=errors,
         )

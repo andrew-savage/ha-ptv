@@ -1,5 +1,6 @@
 """Sensors for PTV."""
 from __future__ import annotations
+import re
 from datetime import datetime
 
 from homeassistant.components.sensor import (
@@ -15,7 +16,9 @@ from .const import (
     CONF_LINES, CONF_STATIONS, CONF_STATION_NAME,
     CONF_STATION_DIRECTIONS, CONF_STATION_COUNT,
     DEFAULT_STATION_COUNT, DIR_CITYBOUND, DIR_OUTBOUND, DIR_BOTH, DOMAIN,
+    MODE_TRAIN, MODE_TRAM, routes_for_mode,
 )
+from .gtfs_static import get_direction_label
 from . import PTVDataCoordinator
 
 
@@ -35,10 +38,13 @@ async def async_setup_entry(
             PTVAlertCountSensor(coordinator, line),
             PTVAlertTextSensor(coordinator, line),
             PTVTrainCountSensor(coordinator, line),
-            PTVOccupancySensor(coordinator, line),
             PTVProblemLevelSensor(coordinator, line),
             PTVProblemSummarySensor(coordinator, line),
         ]
+        # Trams never populate occupancy_status, so the sensor would sit on
+        # "Unknown" forever — omit it rather than ship a dead entity.
+        if not _is_tram(coordinator):
+            entities.append(PTVOccupancySensor(coordinator, line))
         # Per-station sensors
         for scfg in stations_config:
             name = scfg[CONF_STATION_NAME]
@@ -63,13 +69,53 @@ def _ld(coordinator, line):
 def _sd(coordinator, line, station_key):
     return _ld(coordinator, line).get("stations", {}).get(station_key, {})
 
-def _device(line):
+def _device(line, tram: bool = False):
     return {
         "identifiers": {(DOMAIN, f"ptv_{line.lower().replace(' ','_')}")},
-        "name": f"PTV {line} Line",
+        "name": f"PTV {line}" if tram else f"PTV {line} Line",
         "manufacturer": "Transport Victoria",
         "model": "GTFS Realtime",
     }
+
+def _is_tram(coordinator) -> bool:
+    return getattr(coordinator, "mode", MODE_TRAIN) == MODE_TRAM
+
+
+def _slug(name: str, tram: bool) -> str:
+    """Identifier fragment for a stop name.
+
+    Train station IDs keep the original scheme so existing entities survive
+    (only Jolimont-MCG would differ). Tram stop names carry "/" and "#"
+    (e.g. "Clyde St/Raleigh Rd #42"), which need stripping.
+    """
+    if not tram:
+        return name.lower().replace(" ", "_")
+    return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
+
+
+def _line_label(coordinator, line) -> str:
+    """Entity-name prefix, with trailing space.
+
+    Trains read "Hurstbridge Line Max Delay"; tram route names already carry
+    the word Route, so "Route 58 Max Delay".
+    """
+    return f"{line} " if _is_tram(coordinator) else f"{line} Line "
+
+
+def _direction_label(coordinator, line, direction: str) -> str:
+    """"Citybound"/"Outbound" for trains, the destination for trams."""
+    if not _is_tram(coordinator):
+        return "Citybound" if direction == DIR_CITYBOUND else "Outbound"
+    route_id = routes_for_mode(coordinator.mode).get(line, "")
+    label = get_direction_label(
+        getattr(coordinator, "gtfs_cache", {}) or {},
+        route_id,
+        1 if direction == DIR_CITYBOUND else 0,
+    )
+    return f"To {label}" if label else (
+        "Direction 1" if direction == DIR_CITYBOUND else "Direction 0"
+    )
+
 
 def _fmt(iso: str | None, delay_sec: int, is_realtime: bool, is_express: bool = False) -> str:
     if not iso:
@@ -97,7 +143,7 @@ class PTVMaxDelaySensor(CoordinatorEntity, SensorEntity):
         self._line = line
         slug = line.lower().replace(" ","_")
         self._attr_unique_id = f"ptv_{slug}_max_delay"
-        self._attr_name = f"PTV {line} Line Max Delay"
+        self._attr_name = f"PTV {_line_label(coordinator, line)}Max Delay"
 
     @property
     def native_value(self):
@@ -111,7 +157,7 @@ class PTVMaxDelaySensor(CoordinatorEntity, SensorEntity):
         return "mdi:clock-check"
 
     @property
-    def device_info(self): return _device(self._line)
+    def device_info(self): return _device(self._line, _is_tram(self.coordinator))
 
 
 class PTVStatusSensor(CoordinatorEntity, SensorEntity):
@@ -120,7 +166,7 @@ class PTVStatusSensor(CoordinatorEntity, SensorEntity):
         self._line = line
         slug = line.lower().replace(" ","_")
         self._attr_unique_id = f"ptv_{slug}_status"
-        self._attr_name = f"PTV {line} Line Status"
+        self._attr_name = f"PTV {_line_label(coordinator, line)}Status"
 
     @property
     def native_value(self):
@@ -153,7 +199,7 @@ class PTVStatusSensor(CoordinatorEntity, SensorEntity):
         return "mdi:train"
 
     @property
-    def device_info(self): return _device(self._line)
+    def device_info(self): return _device(self._line, _is_tram(self.coordinator))
 
 
 class PTVProblemLevelSensor(CoordinatorEntity, SensorEntity):
@@ -163,7 +209,7 @@ class PTVProblemLevelSensor(CoordinatorEntity, SensorEntity):
         self._line = line
         slug = line.lower().replace(" ","_")
         self._attr_unique_id = f"ptv_{slug}_problem_level"
-        self._attr_name = f"PTV {line} Line Problem Level"
+        self._attr_name = f"PTV {_line_label(coordinator, line)}Problem Level"
 
     @property
     def native_value(self):
@@ -179,7 +225,7 @@ class PTVProblemLevelSensor(CoordinatorEntity, SensorEntity):
         return "mdi:check-circle-outline"
 
     @property
-    def device_info(self): return _device(self._line)
+    def device_info(self): return _device(self._line, _is_tram(self.coordinator))
 
 
 class PTVProblemSummarySensor(CoordinatorEntity, SensorEntity):
@@ -189,7 +235,7 @@ class PTVProblemSummarySensor(CoordinatorEntity, SensorEntity):
         self._line = line
         slug = line.lower().replace(" ","_")
         self._attr_unique_id = f"ptv_{slug}_problem_summary"
-        self._attr_name = f"PTV {line} Line Problem Summary"
+        self._attr_name = f"PTV {_line_label(coordinator, line)}Problem Summary"
 
     @property
     def native_value(self):
@@ -202,7 +248,18 @@ class PTVProblemSummarySensor(CoordinatorEntity, SensorEntity):
         return "mdi:text-box-outline"
 
     @property
-    def device_info(self): return _device(self._line)
+    def extra_state_attributes(self):
+        d = _ld(self.coordinator, self._line)
+        works = d.get("overnight_works_text", "")
+        return {
+            # Same sentence minus works that haven't started yet
+            "live_summary": d.get("problem_summary_live", self.native_value),
+            "overnight_works": works,
+            "has_overnight_works": bool(works),
+        }
+
+    @property
+    def device_info(self): return _device(self._line, _is_tram(self.coordinator))
 
 
 class PTVAlertCountSensor(CoordinatorEntity, SensorEntity):
@@ -212,7 +269,7 @@ class PTVAlertCountSensor(CoordinatorEntity, SensorEntity):
         self._line = line
         slug = line.lower().replace(" ","_")
         self._attr_unique_id = f"ptv_{slug}_alert_count"
-        self._attr_name = f"PTV {line} Line Active Alerts"
+        self._attr_name = f"PTV {_line_label(coordinator, line)}Active Alerts"
 
     @property
     def native_value(self): return _ld(self.coordinator, self._line).get("alert_count", 0)
@@ -221,7 +278,7 @@ class PTVAlertCountSensor(CoordinatorEntity, SensorEntity):
     @property
     def extra_state_attributes(self): return {"alerts": _ld(self.coordinator, self._line).get("alerts", [])}
     @property
-    def device_info(self): return _device(self._line)
+    def device_info(self): return _device(self._line, _is_tram(self.coordinator))
 
 
 class PTVAlertTextSensor(CoordinatorEntity, SensorEntity):
@@ -230,7 +287,7 @@ class PTVAlertTextSensor(CoordinatorEntity, SensorEntity):
         self._line = line
         slug = line.lower().replace(" ","_")
         self._attr_unique_id = f"ptv_{slug}_alert_text"
-        self._attr_name = f"PTV {line} Line Alert"
+        self._attr_name = f"PTV {_line_label(coordinator, line)}Alert"
 
     @property
     def native_value(self): return _ld(self.coordinator, self._line).get("alert_text","No active alerts")
@@ -238,14 +295,19 @@ class PTVAlertTextSensor(CoordinatorEntity, SensorEntity):
     def icon(self): return "mdi:alert" if self.native_value != "No active alerts" else "mdi:check-circle-outline"
     @property
     def extra_state_attributes(self):
-        alerts = _ld(self.coordinator, self._line).get("alerts", [])
-        attrs = {"alert_count": len(alerts)}
+        data = _ld(self.coordinator, self._line)
+        alerts = data.get("alerts", [])
+        attrs = {
+            "alert_count": len(alerts),
+            "live_alert_count": data.get("live_alert_count", len(alerts)),
+        }
         for i, a in enumerate(alerts, 1):
-            for k in ("header","description","cause","effect"):
+            for k in ("header","description","cause","effect",
+                      "is_overnight_works","window_from","window_to","active_now"):
                 attrs[f"alert_{i}_{k}"] = a.get(k,"")
         return attrs
     @property
-    def device_info(self): return _device(self._line)
+    def device_info(self): return _device(self._line, _is_tram(self.coordinator))
 
 
 class PTVTrainCountSensor(CoordinatorEntity, SensorEntity):
@@ -256,12 +318,12 @@ class PTVTrainCountSensor(CoordinatorEntity, SensorEntity):
         self._line = line
         slug = line.lower().replace(" ","_")
         self._attr_unique_id = f"ptv_{slug}_train_count"
-        self._attr_name = f"PTV {line} Line Active Trains"
+        self._attr_name = f"PTV {_line_label(coordinator, line)}Active Trains"
 
     @property
     def native_value(self): return _ld(self.coordinator, self._line).get("train_count", 0)
     @property
-    def device_info(self): return _device(self._line)
+    def device_info(self): return _device(self._line, _is_tram(self.coordinator))
 
 
 class PTVOccupancySensor(CoordinatorEntity, SensorEntity):
@@ -270,7 +332,7 @@ class PTVOccupancySensor(CoordinatorEntity, SensorEntity):
         self._line = line
         slug = line.lower().replace(" ","_")
         self._attr_unique_id = f"ptv_{slug}_occupancy"
-        self._attr_name = f"PTV {line} Line Occupancy"
+        self._attr_name = f"PTV {_line_label(coordinator, line)}Occupancy"
 
     @property
     def native_value(self): return _ld(self.coordinator, self._line).get("worst_occupancy","Unknown")
@@ -285,7 +347,7 @@ class PTVOccupancySensor(CoordinatorEntity, SensorEntity):
         if lvl >= 1: return "mdi:seat"
         return "mdi:seat-outline"
     @property
-    def device_info(self): return _device(self._line)
+    def device_info(self): return _device(self._line, _is_tram(self.coordinator))
 
 
 # ── Per-station upcoming train sensors ───────────────────────────────────
@@ -306,11 +368,11 @@ class PTVUpcomingTrainSensor(CoordinatorEntity, SensorEntity):
         self._index = index           # 1-based
 
         slug_line = line.lower().replace(" ","_")
-        slug_st = station.lower().replace(" ","_")
-        dir_label = "Citybound" if direction == "citybound" else "Outbound"
+        slug_st = _slug(station, _is_tram(coordinator))
+        dir_label = _direction_label(coordinator, line, direction)
 
         self._attr_unique_id = f"ptv_{slug_line}_{slug_st}_{direction}_{index}"
-        self._attr_name = f"PTV {line} Line {station} {dir_label} {index}"
+        self._attr_name = f"PTV {_line_label(coordinator, line)}{station} {dir_label} {index}"
 
     @property
     def _entry(self) -> dict | None:
@@ -360,4 +422,4 @@ class PTVUpcomingTrainSensor(CoordinatorEntity, SensorEntity):
         return "mdi:train-car" if self._index == 1 else "mdi:train-car-flatbed"
 
     @property
-    def device_info(self): return _device(self._line)
+    def device_info(self): return _device(self._line, _is_tram(self.coordinator))

@@ -61,7 +61,7 @@ class PTVDelayBinarySensor(CoordinatorEntity, BinarySensorEntity):
             "max_delay_minutes": round(d.get("max_delay_seconds", 0) / 60, 1),
         }
     @property
-    def device_info(self): return _device(self._line)
+    def device_info(self): return _device(self._line, _is_tram(self.coordinator))
 
 
 class PTVCancellationBinarySensor(CoordinatorEntity, BinarySensorEntity):
@@ -79,7 +79,7 @@ class PTVCancellationBinarySensor(CoordinatorEntity, BinarySensorEntity):
     @property
     def icon(self): return "mdi:train-car-remove" if self.is_on else "mdi:train"
     @property
-    def device_info(self): return _device(self._line)
+    def device_info(self): return _device(self._line, _is_tram(self.coordinator))
 
 
 class PTVAlertBinarySensor(CoordinatorEntity, BinarySensorEntity):
@@ -101,7 +101,7 @@ class PTVAlertBinarySensor(CoordinatorEntity, BinarySensorEntity):
         d = _ld(self.coordinator, self._line)
         return {"alert_count": d.get("alert_count",0), "alert_text": d.get("alert_text","")}
     @property
-    def device_info(self): return _device(self._line)
+    def device_info(self): return _device(self._line, _is_tram(self.coordinator))
 
 
 class PTVProblemBinarySensor(CoordinatorEntity, BinarySensorEntity):
@@ -135,4 +135,4 @@ class PTVProblemBinarySensor(CoordinatorEntity, BinarySensorEntity):
             "problem_summary": d.get("problem_summary",""),
         }
     @property
-    def device_info(self): return _device(self._line)
+    def device_info(self): return _device(self._line, _is_tram(self.coordinator))

@@ -3,14 +3,17 @@
     "step": {
       "user": {
         "title": "PTV – API Key",
-        "description": "Enter your Transport Victoria Open Data API key. Register at {portal_url}.",
-        "data": {"api_key": "API Key"}
+        "description": "Enter your Transport Victoria Open Data API key and choose what to monitor. Add the integration again to monitor a second mode. Register at {portal_url}.",
+        "data": {
+          "api_key": "API Key",
+          "mode": "Transport mode"
+        }
       },
       "lines": {
         "title": "PTV – Select Lines",
         "data": {
           "lines": "Train Lines",
-          "scan_interval": "Polling interval (seconds)"
+          "scan_interval": "Peak-hour polling interval (seconds)"
         }
       },
       "alerts": {
@@ -22,7 +25,7 @@
       },
       "station": {
         "title": "PTV – Add Station{added}",
-        "description": "Add a station on {lines} to monitor. Select '(No more stations)' when done.",
+        "description": "Add a stop on {lines} to monitor. Tram stops include their stop number (e.g. \"#115\"). Select '(Done — no more stations)' when finished.",
         "data": {
           "name": "Station",
           "directions": "Directions to monitor",
@@ -38,6 +41,31 @@
       "station_list_unavailable": "Could not download the station list from Transport Victoria (the schedule file is large and the download may have timed out). Type your station name in manually, or go back and retry.",
       "unknown": "Unexpected error."
     },
-    "abort": {"already_configured": "PTV is already configured."}
+    "abort": {
+      "already_configured": "PTV is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "PTV – Polling Rates",
+        "description": "Poll frequently during the commute peaks and slowly the rest of the time, to cut API usage. Times are local.",
+        "data": {
+          "scan_interval": "Peak interval",
+          "offpeak_interval": "Off-peak interval",
+          "overnight_interval": "Overnight interval",
+          "peak_am_start": "Morning peak starts",
+          "peak_am_end": "Morning peak ends",
+          "peak_pm_start": "Evening peak starts",
+          "peak_pm_end": "Evening peak ends",
+          "overnight_start": "Overnight starts",
+          "overnight_end": "Overnight ends",
+          "peak_on_weekends": "Use peak rates on weekends too"
+        }
+      }
+    },
+    "error": {
+      "empty_peak_window": "A peak window's start and end cannot be the same time."
+    }
   }
 }

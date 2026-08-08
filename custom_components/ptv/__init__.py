@@ -17,8 +17,16 @@ from .const import (
     CONF_API_KEY, CONF_LINES, CONF_SCAN_INTERVAL, CONF_STATIONS,
     CONF_STATION_NAME, CONF_STATION_DIRECTIONS, CONF_STATION_COUNT,
     CONF_ALERT_EFFECTS, DEFAULT_ALERT_EFFECTS,
+    CONF_OFFPEAK_INTERVAL, CONF_OVERNIGHT_INTERVAL,
+    CONF_PEAK_AM_START, CONF_PEAK_AM_END, CONF_PEAK_PM_START, CONF_PEAK_PM_END,
+    CONF_OVERNIGHT_START, CONF_OVERNIGHT_END, CONF_PEAK_ON_WEEKENDS,
+    DEFAULT_OFFPEAK_INTERVAL, DEFAULT_OVERNIGHT_INTERVAL,
+    DEFAULT_PEAK_AM_START, DEFAULT_PEAK_AM_END,
+    DEFAULT_PEAK_PM_START, DEFAULT_PEAK_PM_END,
+    DEFAULT_OVERNIGHT_START, DEFAULT_OVERNIGHT_END, DEFAULT_PEAK_ON_WEEKENDS,
     DEFAULT_DELAY_THRESHOLD, DEFAULT_SCAN_INTERVAL, DEFAULT_STATION_COUNT,
     DIR_CITYBOUND, DIR_OUTBOUND, DIR_BOTH,
+    CONF_MODE, DEFAULT_MODE, MODE_TRAIN, api_base_for_mode, mode_info, routes_for_mode,
     DOMAIN, KNOWN_STOP_IDS, METRO_LINES, OCCUPANCY_LABELS,
     PROBLEM_NONE, PROBLEM_DELAYS, PROBLEM_ALERT, PROBLEM_CANCELLATIONS, PROBLEM_MAJOR,
 )
@@ -27,15 +35,89 @@ from .gtfs_static import download_and_cache_gtfs, get_next_n_scheduled, get_stop
 _LOGGER = logging.getLogger(__name__)
 PLATFORMS = ["binary_sensor", "sensor"]
 
+# Overnight works are published as one active_period spanning the whole
+# campaign (e.g. Mon 23:50 -> Thu 23:59) even though the disruption only runs
+# from that start time until the last service each night. The start's
+# time-of-day is the nightly start; the text says "each night".
+OVERNIGHT_MIN_SPAN = timedelta(hours=24)
+OVERNIGHT_PHRASES = ("each night", "every night", "each evening")
+# Trains have finished by this hour, so the nightly window is start -> 4am.
+END_OF_SERVICE_HOUR = 4
+
+
+def _overnight_window(alert_text: str, start_ts: int, end_ts: int) -> str | None:
+    """Return the nightly start time (e.g. "11:50pm") for overnight works.
+
+    Returns None when the alert is a genuinely continuous disruption.
+    """
+    if not start_ts or not end_ts:
+        return None
+    if (datetime.fromtimestamp(end_ts) - datetime.fromtimestamp(start_ts)) < OVERNIGHT_MIN_SPAN:
+        return None
+    if not any(p in alert_text.lower() for p in OVERNIGHT_PHRASES):
+        return None
+    start = datetime.fromtimestamp(start_ts).astimezone()
+    return start.strftime("%-I:%M%p").lower()
+
+
+def _in_overnight_window(now: datetime, start_ts: int) -> bool:
+    """True when `now` falls inside tonight's works window."""
+    start = datetime.fromtimestamp(start_ts).astimezone()
+    start_minutes = start.hour * 60 + start.minute
+    now_minutes = now.hour * 60 + now.minute
+    return now_minutes >= start_minutes or now_minutes < END_OF_SERVICE_HOUR * 60
+
+
+def _minutes(hhmmss: str) -> int:
+    """Parse a "HH:MM:SS" selector value into minutes since midnight."""
+    h, m, *_ = (hhmmss or "0:0:0").split(":")
+    return int(h) * 60 + int(m)
+
+
+def _within(now_min: int, start_min: int, end_min: int) -> bool:
+    """True if now_min is in [start, end), handling windows spanning midnight."""
+    if start_min <= end_min:
+        return start_min <= now_min < end_min
+    return now_min >= start_min or now_min < end_min
+
+
+POLLING_DEFAULTS = {
+    CONF_SCAN_INTERVAL: DEFAULT_SCAN_INTERVAL,
+    CONF_OFFPEAK_INTERVAL: DEFAULT_OFFPEAK_INTERVAL,
+    CONF_OVERNIGHT_INTERVAL: DEFAULT_OVERNIGHT_INTERVAL,
+    CONF_PEAK_AM_START: DEFAULT_PEAK_AM_START,
+    CONF_PEAK_AM_END: DEFAULT_PEAK_AM_END,
+    CONF_PEAK_PM_START: DEFAULT_PEAK_PM_START,
+    CONF_PEAK_PM_END: DEFAULT_PEAK_PM_END,
+    CONF_OVERNIGHT_START: DEFAULT_OVERNIGHT_START,
+    CONF_OVERNIGHT_END: DEFAULT_OVERNIGHT_END,
+    CONF_PEAK_ON_WEEKENDS: DEFAULT_PEAK_ON_WEEKENDS,
+}
+
+
+def polling_config(entry: ConfigEntry) -> dict:
+    """Options override setup data, which overrides the defaults."""
+    return {
+        key: entry.options.get(key, entry.data.get(key, default))
+        for key, default in POLLING_DEFAULTS.items()
+    }
+
+
+async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    await hass.config_entries.async_reload(entry.entry_id)
+
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     api_key = entry.data[CONF_API_KEY]
     monitored_lines = entry.data[CONF_LINES]
-    scan_interval = entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
+    mode = entry.data.get(CONF_MODE, DEFAULT_MODE)
+    polling = polling_config(entry)
+    scan_interval = polling[CONF_SCAN_INTERVAL]
     alert_effects = set(int(e) for e in entry.data.get(CONF_ALERT_EFFECTS, DEFAULT_ALERT_EFFECTS))
     stations_config = entry.data.get(CONF_STATIONS, [])
 
-    route_ids = {METRO_LINES[l] for l in monitored_lines if l in METRO_LINES}
+    routes = routes_for_mode(mode)
+    route_ids = {routes[l] for l in monitored_lines if l in routes}
     station_names = [s[CONF_STATION_NAME] for s in stations_config]
 
     # Resolve stop IDs for each station
@@ -43,12 +125,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     gtfs_cache: dict = {}
 
     if station_names:
-        # Hardcoded fast path for known stations
-        for name in station_names:
-            key = name.lower()
-            if key in KNOWN_STOP_IDS:
-                station_stop_ids[key] = KNOWN_STOP_IDS[key]
-                _LOGGER.info("Using hardcoded stop_ids for '%s'", name)
+        # Hardcoded fast path for known stations (train only)
+        if mode == MODE_TRAIN:
+            for name in station_names:
+                key = name.lower()
+                if key in KNOWN_STOP_IDS:
+                    station_stop_ids[key] = KNOWN_STOP_IDS[key]
+                    _LOGGER.info("Using hardcoded stop_ids for '%s'", name)
 
         # Download GTFS static for timetable + any unknown stations
         try:
@@ -57,6 +140,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 hass.config.config_dir,
                 station_names,
                 route_ids,
+                mode,
             )
             # Fill in stop IDs for any stations not hardcoded
             for name in station_names:
@@ -80,10 +164,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         stations_config=stations_config,
         station_stop_ids=station_stop_ids,
         gtfs_cache=gtfs_cache,
+        polling=polling,
+        mode=mode,
     )
 
     await coordinator.async_config_entry_first_refresh()
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
+    entry.async_on_unload(entry.add_update_listener(_async_options_updated))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 
@@ -98,17 +185,51 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 class PTVDataCoordinator(DataUpdateCoordinator):
 
     def __init__(self, hass, api_key, monitored_lines, scan_interval,
-                 alert_effects, stations_config, station_stop_ids, gtfs_cache):
+                 alert_effects, stations_config, station_stop_ids, gtfs_cache,
+                 polling=None, mode=DEFAULT_MODE):
         self.api_key = api_key
+        self.mode = mode
+        self.api_base = api_base_for_mode(mode)
         self.monitored_lines = monitored_lines
         self.alert_effects = alert_effects        # set of int effect values to include
         self.stations_config = stations_config   # list of {name, directions, count}
         self.station_stop_ids = station_stop_ids  # key -> {stop_ids, citybound_stop_ids, outbound_stop_ids}
         self.gtfs_cache = gtfs_cache
+        self.polling = {
+            CONF_SCAN_INTERVAL: scan_interval,
+            CONF_OFFPEAK_INTERVAL: DEFAULT_OFFPEAK_INTERVAL,
+            CONF_OVERNIGHT_INTERVAL: DEFAULT_OVERNIGHT_INTERVAL,
+            CONF_PEAK_AM_START: DEFAULT_PEAK_AM_START,
+            CONF_PEAK_AM_END: DEFAULT_PEAK_AM_END,
+            CONF_PEAK_PM_START: DEFAULT_PEAK_PM_START,
+            CONF_PEAK_PM_END: DEFAULT_PEAK_PM_END,
+            CONF_OVERNIGHT_START: DEFAULT_OVERNIGHT_START,
+            CONF_OVERNIGHT_END: DEFAULT_OVERNIGHT_END,
+            CONF_PEAK_ON_WEEKENDS: DEFAULT_PEAK_ON_WEEKENDS,
+            **(polling or {}),
+        }
         super().__init__(
             hass, _LOGGER, name=DOMAIN,
-            update_interval=timedelta(seconds=scan_interval),
+            update_interval=self._interval_for_now(),
         )
+
+    def _interval_for_now(self) -> timedelta:
+        """Poll fast during commute peaks, slowly overnight."""
+        p = self.polling
+        now = datetime.now().astimezone()
+        now_min = now.hour * 60 + now.minute
+
+        peak_applies = p[CONF_PEAK_ON_WEEKENDS] or now.weekday() < 5
+        if peak_applies and (
+            _within(now_min, _minutes(p[CONF_PEAK_AM_START]), _minutes(p[CONF_PEAK_AM_END]))
+            or _within(now_min, _minutes(p[CONF_PEAK_PM_START]), _minutes(p[CONF_PEAK_PM_END]))
+        ):
+            return timedelta(seconds=int(p[CONF_SCAN_INTERVAL]))
+
+        if _within(now_min, _minutes(p[CONF_OVERNIGHT_START]), _minutes(p[CONF_OVERNIGHT_END])):
+            return timedelta(seconds=int(p[CONF_OVERNIGHT_INTERVAL]))
+
+        return timedelta(seconds=int(p[CONF_OFFPEAK_INTERVAL]))
 
     def _secs_since_midnight(self) -> int:
         n = datetime.now().astimezone()
@@ -121,7 +242,7 @@ class PTVDataCoordinator(DataUpdateCoordinator):
 
     def _fetch_feed(self, path: str) -> bytes:
         resp = requests.get(
-            f"{API_BASE_URL}{path}",
+            f"{self.api_base}{path}",
             headers={API_HEADER_KEY: self.api_key},
             timeout=30,
         )
@@ -129,6 +250,12 @@ class PTVDataCoordinator(DataUpdateCoordinator):
         return resp.content
 
     async def _async_update_data(self) -> dict:
+        # _schedule_refresh re-reads this after every poll, so retuning here
+        # takes effect from the next one.
+        interval = self._interval_for_now()
+        if interval != self.update_interval:
+            _LOGGER.debug("Polling interval now %s", interval)
+            self.update_interval = interval
         try:
             trip_raw, alerts_raw, pos_raw = await self.hass.async_add_executor_job(
                 lambda: (
@@ -172,7 +299,10 @@ class PTVDataCoordinator(DataUpdateCoordinator):
             # Alerts
             "alerts": [],
             "alert_count": 0,
+            "live_alert_count": 0,
             "alert_text": "No active alerts",
+            "live_alert_text": "",
+            "overnight_works_text": "",
             # Vehicles
             "train_count": 0,
             "worst_occupancy": "Unknown",
@@ -189,7 +319,8 @@ class PTVDataCoordinator(DataUpdateCoordinator):
     # ------------------------------------------------------------------ #
 
     def _parse_all(self, trip_raw, alerts_raw, pos_raw) -> dict:
-        route_map = {METRO_LINES[l]: l for l in self.monitored_lines if l in METRO_LINES}
+        routes = routes_for_mode(self.mode)
+        route_map = {routes[l]: l for l in self.monitored_lines if l in routes}
 
         results = {line: self._empty_line_data() for line in self.monitored_lines}
 
@@ -412,11 +543,32 @@ class PTVDataCoordinator(DataUpdateCoordinator):
                     if tr.language in ("en","en-AU",""): return tr.text
                 return t.translation[0].text
 
+            header = best_text(alert.header_text)
+            description = best_text(alert.description_text)
+
+            # Overnight works stay listed outside their hours, but tagged with
+            # the window and not counted as a live disruption.
+            window_from = None
+            in_window = True
+            for p in alert.active_period:
+                window_from = _overnight_window(
+                    f"{header} {description}", p.start, p.end
+                )
+                if window_from:
+                    in_window = _in_overnight_window(
+                        datetime.now().astimezone(), p.start
+                    )
+                    break
+
             alert_dict = {
-                "header": best_text(alert.header_text),
-                "description": best_text(alert.description_text),
+                "header": header,
+                "description": description,
                 "cause": cause_labels.get(alert.cause,""),
                 "effect": effect_labels.get(alert.effect,""),
+                "is_overnight_works": bool(window_from),
+                "window_from": window_from or "",
+                "window_to": "last service" if window_from else "",
+                "active_now": in_window,
             }
 
             matched: set[str] = set()
@@ -439,17 +591,33 @@ class PTVDataCoordinator(DataUpdateCoordinator):
             data = results[line]
             alerts = data["alerts"]
             data["alert_count"] = len(alerts)
+            # Overnight works outside their hours shouldn't flag the line as
+            # disrupted; they stay in alert_text, tagged with their window.
+            data["live_alert_count"] = sum(1 for a in alerts if a["active_now"])
+
+            texts: list[str] = []          # everything, works tagged with hours
+            live_texts: list[str] = []     # happening now
+            tonight_texts: list[str] = []  # works starting later tonight
+            for a in alerts:
+                text = a["header"] or a["description"]
+                if a["effect"] and a["effect"] not in text:
+                    text = f"{a['effect']}: {text}" if text else a["effect"]
+                if not text:
+                    continue
+                if a["is_overnight_works"] and not a["active_now"]:
+                    window = f"{a['window_from']}–{a['window_to']}"
+                    tonight_texts.append(f"{window}: {text}")
+                    texts.append(f"Tonight {window}: {text}")
+                else:
+                    live_texts.append(text)
+                    texts.append(text)
+
             if alerts:
-                texts = []
-                for a in alerts:
-                    text = a["header"] or a["description"]
-                    if a["effect"] and a["effect"] not in text:
-                        text = f"{a['effect']}: {text}" if text else a["effect"]
-                    if text:
-                        texts.append(text)
                 data["alert_text"] = " | ".join(texts) if texts else "Active disruption"
             else:
                 data["alert_text"] = "No active alerts"
+            data["live_alert_text"] = " | ".join(live_texts)
+            data["overnight_works_text"] = " | ".join(tonight_texts)
 
     # ------------------------------------------------------------------ #
     # Vehicle positions
@@ -491,7 +659,7 @@ class PTVDataCoordinator(DataUpdateCoordinator):
     def _build_problem_summary(self, results):
         for line in self.monitored_lines:
             data = results[line]
-            has_alerts = data["alert_count"] > 0
+            has_alerts = data.get("live_alert_count", data["alert_count"]) > 0
             has_cancellations = data["has_cancellations"]
             has_delays = data["has_delays"]
             max_min = round(data["max_delay_seconds"] / 60)
@@ -510,20 +678,26 @@ class PTVDataCoordinator(DataUpdateCoordinator):
 
             data["problem_level"] = level
 
-            # Build TTS-friendly summary
-            parts = []
-            if has_alerts:
-                parts.append(data["alert_text"])
+            # Build TTS-friendly summaries. problem_summary lists overnight
+            # works even out of hours (tagged with their window);
+            # problem_summary_live covers only what is happening right now.
+            disruptions = []
             if has_cancellations:
                 n = len(data["cancelled_trips"])
-                parts.append(f"{n} service{'s' if n!=1 else ''} cancelled")
+                disruptions.append(f"{n} service{'s' if n!=1 else ''} cancelled")
             if has_delays:
-                parts.append(
+                disruptions.append(
                     f"{data['delay_count']} service{'s' if data['delay_count']!=1 else ''} "
                     f"delayed up to {max_min} minute{'s' if max_min!=1 else ''}"
                 )
 
-            if parts:
-                data["problem_summary"] = f"{line} line: " + "; ".join(parts) + "."
-            else:
-                data["problem_summary"] = f"{line} line is running normally."
+            def summarise(alert_part: str) -> str:
+                parts = ([alert_part] if alert_part else []) + disruptions
+                if not parts:
+                    return f"{line} line is running normally."
+                return f"{line} line: " + "; ".join(parts) + "."
+
+            data["problem_summary"] = summarise(
+                data["alert_text"] if data["alert_count"] > 0 else ""
+            )
+            data["problem_summary_live"] = summarise(data["live_alert_text"])

@@ -3,7 +3,9 @@
 DOMAIN = "ptv"
 
 # API - Realtime feeds
-API_BASE_URL = "https://api.opendata.transport.vic.gov.au/opendata/public-transport/gtfs/realtime/v1/metro"
+API_ROOT = "https://api.opendata.transport.vic.gov.au/opendata/public-transport/gtfs/realtime/v1"
+# Kept for backwards compatibility; train (metro) is the original mode.
+API_BASE_URL = f"{API_ROOT}/metro"
 API_TRIP_UPDATES_PATH = "/trip-updates"
 API_SERVICE_ALERTS_PATH = "/service-alerts"
 API_VEHICLE_POSITIONS_PATH = "/vehicle-positions"
@@ -19,6 +21,7 @@ GTFS_CACHE_FILE = "ptv_gtfs_cache.json"
 GTFS_CACHE_TTL_DAYS = 3
 GTFS_DOWNLOAD_TIMEOUT = 420
 GTFS_METRO_INNER_ZIP = "2/google_transit.zip"
+GTFS_TRAM_INNER_ZIP = "3/google_transit.zip"
 
 # Config keys
 CONF_API_KEY = "api_key"
@@ -26,6 +29,18 @@ CONF_LINES = "lines"
 CONF_SCAN_INTERVAL = "scan_interval"
 CONF_STATIONS = "stations"          # list of station config dicts
 CONF_ALERT_EFFECTS = "alert_effects"  # list of GTFS effect int values (as strings) to include
+
+# Adaptive polling. CONF_SCAN_INTERVAL is the peak-hour rate; the other two
+# tiers apply outside the peak windows. All are editable via the options flow.
+CONF_OFFPEAK_INTERVAL = "offpeak_interval"
+CONF_OVERNIGHT_INTERVAL = "overnight_interval"
+CONF_PEAK_AM_START = "peak_am_start"
+CONF_PEAK_AM_END = "peak_am_end"
+CONF_PEAK_PM_START = "peak_pm_start"
+CONF_PEAK_PM_END = "peak_pm_end"
+CONF_OVERNIGHT_START = "overnight_start"
+CONF_OVERNIGHT_END = "overnight_end"
+CONF_PEAK_ON_WEEKENDS = "peak_on_weekends"
 
 # GTFS alert effect values → human-readable labels
 # Value 0 = unknown/unset; 1-11 match the GTFS spec
@@ -58,6 +73,15 @@ DIR_BOTH = "both"
 
 # Defaults
 DEFAULT_SCAN_INTERVAL = 60
+DEFAULT_OFFPEAK_INTERVAL = 300      # 5 min
+DEFAULT_OVERNIGHT_INTERVAL = 900    # 15 min
+DEFAULT_PEAK_AM_START = "06:00:00"
+DEFAULT_PEAK_AM_END = "10:00:00"
+DEFAULT_PEAK_PM_START = "16:00:00"
+DEFAULT_PEAK_PM_END = "20:00:00"
+DEFAULT_OVERNIGHT_START = "00:00:00"
+DEFAULT_OVERNIGHT_END = "06:00:00"
+DEFAULT_PEAK_ON_WEEKENDS = False
 DEFAULT_DELAY_THRESHOLD = 300   # 5 min
 DEFAULT_STATION_COUNT = 4
 DEFAULT_DIRECTIONS = DIR_BOTH
@@ -81,6 +105,72 @@ METRO_LINES = {
     "Werribee":      "aus:vic:vic-02-WER:",
     "Williamstown":  "aus:vic:vic-02-WIL:",
 }
+
+# Tram route IDs — confirmed 2026-08-05
+TRAM_ROUTES = {
+    "Route 1":   "aus:vic:vic-03-1:",
+    "Route 3":   "aus:vic:vic-03-3:",
+    "Route 5":   "aus:vic:vic-03-5:",
+    "Route 6":   "aus:vic:vic-03-6:",
+    "Route 11":  "aus:vic:vic-03-11:",
+    "Route 12":  "aus:vic:vic-03-12:",
+    "Route 16":  "aus:vic:vic-03-16:",
+    "Route 19":  "aus:vic:vic-03-19:",
+    "Route 30":  "aus:vic:vic-03-30:",
+    "Route 35":  "aus:vic:vic-03-35:",
+    "Route 48":  "aus:vic:vic-03-48:",
+    "Route 57":  "aus:vic:vic-03-57:",
+    "Route 58":  "aus:vic:vic-03-58:",
+    "Route 59":  "aus:vic:vic-03-59:",
+    "Route 64":  "aus:vic:vic-03-64:",
+    "Route 67":  "aus:vic:vic-03-67:",
+    "Route 70":  "aus:vic:vic-03-70:",
+    "Route 72":  "aus:vic:vic-03-72:",
+    "Route 75":  "aus:vic:vic-03-75:",
+    "Route 78":  "aus:vic:vic-03-78:",
+    "Route 82":  "aus:vic:vic-03-82:",
+    "Route 86":  "aus:vic:vic-03-86:",
+    "Route 96":  "aus:vic:vic-03-96:",
+    "Route 109": "aus:vic:vic-03-109:",
+}
+
+# Transport modes. Each is a separate config entry.
+CONF_MODE = "mode"
+MODE_TRAIN = "train"
+MODE_TRAM = "tram"
+DEFAULT_MODE = MODE_TRAIN
+
+MODES = {
+    MODE_TRAIN: {
+        "label": "Metro Train",
+        "api_path": "metro",
+        "gtfs_inner_zip": GTFS_METRO_INNER_ZIP,
+        "routes": METRO_LINES,
+        "route_word": "line",
+        "stop_word": "station",
+    },
+    MODE_TRAM: {
+        "label": "Tram",
+        "api_path": "tram",
+        "gtfs_inner_zip": GTFS_TRAM_INNER_ZIP,
+        "routes": TRAM_ROUTES,
+        "route_word": "route",
+        "stop_word": "stop",
+    },
+}
+
+
+def mode_info(mode: str) -> dict:
+    """Mode table entry, defaulting to train for pre-mode config entries."""
+    return MODES.get(mode or DEFAULT_MODE, MODES[DEFAULT_MODE])
+
+
+def routes_for_mode(mode: str) -> dict:
+    return mode_info(mode)["routes"]
+
+
+def api_base_for_mode(mode: str) -> str:
+    return f"{API_ROOT}/{mode_info(mode)['api_path']}"
 
 # Hardcoded stop IDs for known stations (fast path, no GTFS download needed)
 # Confirmed from GTFS static 2026-04-05
