@@ -16,7 +16,7 @@ from .const import (
     CONF_LINES, CONF_STATIONS, CONF_STATION_NAME,
     CONF_STATION_DIRECTIONS, CONF_STATION_COUNT,
     DEFAULT_STATION_COUNT, DIR_CITYBOUND, DIR_OUTBOUND, DIR_BOTH, DOMAIN,
-    MODE_TRAIN, MODE_TRAM, routes_for_mode,
+    MODE_TRAIN, MODE_TRAM, routes_for_mode, line_phrase,
 )
 from .gtfs_static import get_direction_label
 from . import PTVDataCoordinator
@@ -91,6 +91,21 @@ def _slug(name: str, tram: bool) -> str:
     if not tram:
         return name.lower().replace(" ", "_")
     return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
+
+
+_TRAM_ICONS = {
+    "mdi:train": "mdi:tram",
+    "mdi:train-variant": "mdi:tram-side",
+    "mdi:train-car": "mdi:tram",
+    "mdi:train-car-flatbed": "mdi:tram-side",
+    "mdi:train-alert": "mdi:alert-circle",
+    "mdi:train-car-remove": "mdi:close-octagon",
+}
+
+
+def _ic(coordinator, icon: str) -> str:
+    """Swap rail icons for tram equivalents on tram entries."""
+    return _TRAM_ICONS.get(icon, icon) if _is_tram(coordinator) else icon
 
 
 def _line_label(coordinator, line) -> str:
@@ -188,14 +203,14 @@ class PTVStatusSensor(CoordinatorEntity, SensorEntity):
                 dep = cb[0]
                 parts.append(_fmt(dep["dt_iso"], dep["delay_sec"], dep["is_realtime"], dep.get("is_express", False)))
         if not parts:
-            return f"{self._line} line running normally"
+            return f"{line_phrase(getattr(self.coordinator, 'mode', MODE_TRAIN), self._line)} running normally"
         return f"{self._line}: " + "; ".join(parts)
 
     @property
     def icon(self):
         level = _ld(self.coordinator, self._line).get("problem_level","none")
-        if level in ("major","cancellations"): return "mdi:train-car-remove"
-        if level in ("alert","delays"):        return "mdi:train-alert"
+        if level in ("major","cancellations"): return _ic(self.coordinator, "mdi:train-car-remove")
+        if level in ("alert","delays"):        return _ic(self.coordinator, "mdi:train-alert")
         return "mdi:train"
 
     @property
@@ -219,7 +234,7 @@ class PTVProblemLevelSensor(CoordinatorEntity, SensorEntity):
     def icon(self):
         v = self.native_value
         if v == "major":         return "mdi:alert-octagon"
-        if v == "cancellations": return "mdi:train-car-remove"
+        if v == "cancellations": return _ic(self.coordinator, "mdi:train-car-remove")
         if v == "alert":         return "mdi:alert-circle"
         if v == "delays":        return "mdi:clock-alert"
         return "mdi:check-circle-outline"
@@ -240,7 +255,8 @@ class PTVProblemSummarySensor(CoordinatorEntity, SensorEntity):
     @property
     def native_value(self):
         return _ld(self.coordinator, self._line).get(
-            "problem_summary", f"{self._line} line is running normally."
+            "problem_summary",
+            f"{line_phrase(getattr(self.coordinator, 'mode', MODE_TRAIN), self._line)} is running normally."
         )
 
     @property
@@ -318,7 +334,8 @@ class PTVTrainCountSensor(CoordinatorEntity, SensorEntity):
         self._line = line
         slug = line.lower().replace(" ","_")
         self._attr_unique_id = f"ptv_{slug}_train_count"
-        self._attr_name = f"PTV {_line_label(coordinator, line)}Active Trains"
+        self._attr_name = (f"PTV {_line_label(coordinator, line)}"
+                           f"Active {'Trams' if _is_tram(coordinator) else 'Trains'}")
 
     @property
     def native_value(self): return _ld(self.coordinator, self._line).get("train_count", 0)

@@ -18,7 +18,7 @@ A Home Assistant custom integration for **Public Transport Victoria (PTV)** metr
 - **Trains and trams** — all 16 Metro lines and all 24 tram routes, each added as its own entry
 - **Real-time trip updates** — delays, cancellations, schedule relationships
 - **Service alerts** — published PTV disruption messages (signal faults, planned works, etc.)
-- **Vehicle positions** — active train count and worst occupancy level per line
+- **Vehicle positions** — count of services currently running, plus worst occupancy level (trains only)
 - **Next N departures** per station per direction — realtime where available, static timetable fallback otherwise
 - **Express services flagged** — departures running express are marked and labelled in the displayed time
 - **Overnight works handled sensibly** — planned nightly works are listed with their actual hours instead of reporting the line as disrupted all day
@@ -28,7 +28,9 @@ A Home Assistant custom integration for **Public Transport Victoria (PTV)** metr
 - **Multiple stations** — monitor any number of stations, each with configurable directions and departure count
 - **Static timetable fallback** — always shows a departure time even when the realtime feed has nothing upcoming
 
-## Sensors created per line
+## Sensors created per line or route
+
+`<line>` is the line name for trains (`hurstbridge`) or the route for trams (`route_58`).
 
 | Entity | Description |
 |--------|-------------|
@@ -37,26 +39,28 @@ A Home Assistant custom integration for **Public Transport Victoria (PTV)** metr
 | `sensor.ptv_<line>_alert` | Current PTV alert message |
 | `sensor.ptv_<line>_active_alerts` | Count of active alerts |
 | `sensor.ptv_<line>_max_delay` | Worst current delay in minutes |
-| `sensor.ptv_<line>_active_trains` | Trains currently running |
-| `sensor.ptv_<line>_occupancy` | Worst occupancy (Empty → Full) |
+| `sensor.ptv_<line>_active_trains` | Services currently running. Displayed as "Active Trams" on tram entries, though the entity ID keeps `active_trains` |
+| `sensor.ptv_<line>_occupancy` | Worst occupancy (Empty → Full). **Trains only** — trams don't report occupancy, so this sensor isn't created |
 | `sensor.ptv_<line>_status` | Combined status text |
 | `binary_sensor.ptv_<line>_any_problem` | ON when anything is wrong |
 | `binary_sensor.ptv_<line>_delays` | ON when delays ≥ 5 min |
 | `binary_sensor.ptv_<line>_cancellations` | ON when services cancelled |
 | `binary_sensor.ptv_<line>_service_alert` | ON when alert published |
 
-## Sensors created per station
+## Sensors created per station or stop
 
-For each configured station (e.g. Ivanhoe, citybound, count=4):
+For each configured station or stop (e.g. Ivanhoe, citybound, count=4):
 
 | Entity | Description |
 |--------|-------------|
-| `sensor.ptv_<line>_<station>_citybound_1` | Next citybound departure (timestamp) |
-| `sensor.ptv_<line>_<station>_citybound_2` | 2nd citybound departure |
-| `sensor.ptv_<line>_<station>_citybound_3` | 3rd citybound departure |
-| `sensor.ptv_<line>_<station>_citybound_4` | 4th citybound departure |
-| `sensor.ptv_<line>_<station>_outbound_1` | Next outbound departure |
+| `sensor.ptv_<line>_<stop>_citybound_1` | Next citybound departure (timestamp) |
+| `sensor.ptv_<line>_<stop>_citybound_2` | 2nd citybound departure |
+| `sensor.ptv_<line>_<stop>_citybound_3` | 3rd citybound departure |
+| `sensor.ptv_<line>_<stop>_citybound_4` | 4th citybound departure |
+| `sensor.ptv_<line>_<stop>_outbound_1` | Next outbound departure |
 | ... | ... |
+
+> **Tram direction naming.** Entity IDs keep `citybound` and `outbound` for both modes, but tram *display names* use the destination. So `sensor.ptv_route_58_..._citybound_1` is named "PTV Route 58 … To Toorak 1". Use the entity ID in automations; the friendly name is what you'll see on a dashboard.
 
 Each sensor has attributes: `formatted`, `delay_minutes`, `on_time`, `is_realtime`, `is_express`, `source`.
 
@@ -153,11 +157,51 @@ A ready-to-use blueprint is included at `blueprints/ptv_commute_notifications.ya
 | Departure reminder time | When to send the next-trains list (e.g. 07:50) |
 | Active days | Which days of the week to fire |
 | Mention tonight's planned works | Show overnight works under a "🌙 Tonight" line (default on) |
+| Service type | Train, Tram or Bus — sets the wording and icons (default Train) |
+| Also trigger on these entities | Optional helpers/entities that also send a notification |
+| What those entities send | Departure reminder, line status, or both |
 
 The blueprint sends two notifications daily:
 
 - **Morning status** — fires at your chosen time with an emoji-coded title (✅ on time / ⏱️ delays / ⚠️ alert / 🚫 cancelled / 🚨 major) and a plain-English summary sentence
 - **Departure reminder** — fires closer to when you leave, listing the next 4 trains with times and delay info. If there's an active disruption the summary is prepended so you always have context. Includes a tap action to open the PTV website.
+
+### Triggering it from something other than a time
+
+Set **Also trigger on these entities** to any helper or entity, and pick what it sends under **What those entities send** (departure reminder, line status, or both). It fires when the entity turns on or is pressed, so leaving an `input_boolean` switched on won't re-trigger it.
+
+Typical uses: an `input_button` on a dashboard, or an `input_boolean` your alarm automation switches on so the commute lands with your alarm rather than at a fixed time.
+
+```yaml
+# Example helper — Settings → Devices & Services → Helpers
+input_button:
+  ptv_check_now:
+    name: Check my commute
+```
+
+The two scheduled times keep working alongside this; leave them as they are, or set the days filter to no days if you only want entity triggers.
+
+### Testing it without waiting
+
+Open the automation and choose **Run actions** from the ⋮ menu. Both notifications are sent immediately using live sensor data, and the active-days filter is ignored — so you can check it works on a Sunday afternoon.
+
+For a button on a dashboard, call the same service:
+
+```yaml
+type: button
+name: Test PTV notification
+tap_action:
+  action: call-service
+  service: automation.trigger
+  target:
+    entity_id: automation.your_ptv_automation
+```
+
+At their scheduled times each notification still fires on its own, exactly as before.
+
+### Wording for trams
+
+Set **Service type** to Tram and the notifications follow suit — "🚊 Next trams from Casino/Southbank", "Your Route is On Time", "Trams Cancelled". Bus wording is available too, for when bus support lands. It defaults to Train, so existing automations read exactly as before.
 
 Both notifications describe only what is happening now. Works scheduled for later tonight are listed separately, so a morning notification reads:
 

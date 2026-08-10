@@ -7,6 +7,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
+from .sensor import _ic, _is_tram
 from .const import CONF_LINES, DOMAIN
 from . import PTVDataCoordinator
 
@@ -52,7 +53,7 @@ class PTVDelayBinarySensor(CoordinatorEntity, BinarySensorEntity):
     @property
     def is_on(self): return _ld(self.coordinator, self._line).get("has_delays", False)
     @property
-    def icon(self): return "mdi:train-alert" if self.is_on else "mdi:train"
+    def icon(self): return _ic(self.coordinator, "mdi:train-alert" if self.is_on else "mdi:train")
     @property
     def extra_state_attributes(self):
         d = _ld(self.coordinator, self._line)
@@ -77,7 +78,7 @@ class PTVCancellationBinarySensor(CoordinatorEntity, BinarySensorEntity):
     @property
     def is_on(self): return _ld(self.coordinator, self._line).get("has_cancellations", False)
     @property
-    def icon(self): return "mdi:train-car-remove" if self.is_on else "mdi:train"
+    def icon(self): return _ic(self.coordinator, "mdi:train-car-remove" if self.is_on else "mdi:train")
     @property
     def device_info(self): return _device(self._line, _is_tram(self.coordinator))
 
@@ -123,7 +124,7 @@ class PTVProblemBinarySensor(CoordinatorEntity, BinarySensorEntity):
     def icon(self):
         level = _ld(self.coordinator, self._line).get("problem_level","none")
         if level == "major":         return "mdi:alert-octagon"
-        if level == "cancellations": return "mdi:train-car-remove"
+        if level == "cancellations": return _ic(self.coordinator, "mdi:train-car-remove")
         if level == "alert":         return "mdi:alert-circle"
         if level == "delays":        return "mdi:clock-alert"
         return "mdi:check-circle-outline"

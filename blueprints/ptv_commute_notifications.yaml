@@ -16,6 +16,15 @@ blueprint:
     Planned overnight works are reported separately under a "🌙 Tonight"
     line, with the hours they actually run, rather than being treated as a
     disruption happening right now. Requires PTV integration 0.1.4 or newer.
+
+    Besides the two scheduled times, any helper or entity can trigger a
+    notification — an input_button on a dashboard, an input_boolean, or an
+    alarm helper. Set "Also trigger on these entities" and choose what they
+    send.
+
+    To test without waiting, open the automation and choose "Run actions"
+    (⋮ menu). That sends both notifications immediately using live data,
+    and ignores the day filter.
   domain: automation
   source_url: https://github.com/andrew-savage/ha-ptv
 
@@ -42,28 +51,28 @@ blueprint:
 
     # ── Station departure sensors ────────────────────────────────────────────
     train_1:
-      name: Next train (1st)
+      name: Next service (1st)
       description: e.g. sensor.ptv_hurstbridge_ivanhoe_citybound_1
       selector:
         entity:
           domain: sensor
 
     train_2:
-      name: Next train (2nd)
+      name: Next service (2nd)
       description: e.g. sensor.ptv_hurstbridge_ivanhoe_citybound_2
       selector:
         entity:
           domain: sensor
 
     train_3:
-      name: Next train (3rd)
+      name: Next service (3rd)
       description: e.g. sensor.ptv_hurstbridge_ivanhoe_citybound_3
       selector:
         entity:
           domain: sensor
 
     train_4:
-      name: Next train (4th)
+      name: Next service (4th)
       description: e.g. sensor.ptv_hurstbridge_ivanhoe_citybound_4
       selector:
         entity:
@@ -75,6 +84,51 @@ blueprint:
       default: My Station
       selector:
         text:
+
+    # ── Service type ─────────────────────────────────────────────────────────
+    service_type:
+      name: Service type
+      description: >
+        Sets the wording and icons used in the notifications — "Next trams
+        from Casino/Southbank" rather than "Next trains". Match this to the
+        entities you selected above.
+      default: train
+      selector:
+        select:
+          options:
+            - label: Train
+              value: train
+            - label: Tram
+              value: tram
+            - label: Bus
+              value: bus
+
+    # ── Extra triggers ───────────────────────────────────────────────────────
+    trigger_entities:
+      name: Also trigger on these entities
+      description: >
+        Optional. Any helper or entity that should also send the notification —
+        an input_button pressed from a dashboard, an input_boolean switched on,
+        or an alarm helper turning on. Fires when the entity turns on or is
+        pressed, so leaving an input_boolean on will not re-trigger it.
+      default: []
+      selector:
+        entity:
+          multiple: true
+
+    trigger_sends:
+      name: What those entities send
+      description: Which notification the entities above should send.
+      default: departure_reminder
+      selector:
+        select:
+          options:
+            - label: Departure reminder (next services)
+              value: departure_reminder
+            - label: Line status
+              value: morning_status
+            - label: Both
+              value: both
 
     # ── Overnight works ──────────────────────────────────────────────────────
     mention_overnight_works:
@@ -153,6 +207,17 @@ trigger:
     platform: time
     at: !input departure_time
 
+  - id: entity_trigger
+    platform: state
+    entity_id: !input trigger_entities
+    not_to:
+      - "off"
+      - "unknown"
+      - "unavailable"
+    not_from:
+      - "unknown"
+      - "unavailable"
+
 # ── Day filter ───────────────────────────────────────────────────────────────
 condition:
   - condition: time
@@ -169,6 +234,14 @@ variables:
   station_name: !input station_name
   notify_service: !input notify_service
   mention_overnight_works: !input mention_overnight_works
+  trigger_sends: !input trigger_sends
+  service_type: !input service_type
+  vehicle_plural: >-
+    {{ {'train': 'trains', 'tram': 'trams', 'bus': 'buses'}.get(service_type, 'services') }}
+  vehicle_emoji: >-
+    {{ {'train': '🚆', 'tram': '🚊', 'bus': '🚌'}.get(service_type, '🚆') }}
+  line_word: >-
+    {{ {'train': 'Line', 'tram': 'Route', 'bus': 'Route'}.get(service_type, 'Line') }}
   # problem_level already ignores works that haven't started, so the title
   # reflects the line's actual state right now.
   live_summary: >
@@ -182,18 +255,22 @@ action:
 
       # ── Morning status ────────────────────────────────────────────────────
       - conditions:
-          - condition: trigger
-            id: morning_status
+          - condition: template
+            value_template: >-
+              {% set t = (trigger | default({})).get('id', '') %}
+              {{ t in ['', 'morning_status']
+                 or (t == 'entity_trigger'
+                     and trigger_sends in ['both', 'morning_status']) }}
         sequence:
           - service: "{{ notify_service }}"
             data:
               title: >
                 {% set level = states(problem_level_sensor) %}
                 {% if level == 'major' %}🚨 Major Disruption
-                {% elif level == 'cancellations' %}🚫 Trains Cancelled
+                {% elif level == 'cancellations' %}🚫 {{ vehicle_plural | capitalize }} Cancelled
                 {% elif level == 'alert' %}⚠️ Service Alert
-                {% elif level == 'delays' %}⏱️ Delays on Your Line
-                {% else %}✅ Your Line is On Time
+                {% elif level == 'delays' %}⏱️ Delays on Your {{ line_word }}
+                {% else %}✅ Your {{ line_word }} is On Time
                 {% endif %}
               message: >-
                 {%- set parts = [live_summary] -%}
@@ -202,20 +279,26 @@ action:
                 {%- endif -%}
                 {{ parts | join('\n') }}
 
+  - choose:
+
       # ── Departure reminder ────────────────────────────────────────────────
       - conditions:
-          - condition: trigger
-            id: departure_reminder
+          - condition: template
+            value_template: >-
+              {% set t = (trigger | default({})).get('id', '') %}
+              {{ t in ['', 'departure_reminder']
+                 or (t == 'entity_trigger'
+                     and trigger_sends in ['both', 'departure_reminder']) }}
         sequence:
           - service: "{{ notify_service }}"
             data:
               title: >
                 {% set level = states(problem_level_sensor) %}
-                {% if level == 'major' %}🚨 Disruption – Next trains from {{ station_name }}
-                {% elif level == 'cancellations' %}🚫 Cancellations – Next trains from {{ station_name }}
-                {% elif level == 'alert' %}⚠️ Alert – Next trains from {{ station_name }}
-                {% elif level == 'delays' %}⏱️ Delays – Next trains from {{ station_name }}
-                {% else %}🚆 Next trains from {{ station_name }}
+                {% if level == 'major' %}🚨 Disruption – Next {{ vehicle_plural }} from {{ station_name }}
+                {% elif level == 'cancellations' %}🚫 Cancellations – Next {{ vehicle_plural }} from {{ station_name }}
+                {% elif level == 'alert' %}⚠️ Alert – Next {{ vehicle_plural }} from {{ station_name }}
+                {% elif level == 'delays' %}⏱️ Delays – Next {{ vehicle_plural }} from {{ station_name }}
+                {% else %}{{ vehicle_emoji }} Next {{ vehicle_plural }} from {{ station_name }}
                 {% endif %}
               message: >-
                 {%- set parts = [] -%}

@@ -46,10 +46,10 @@ CONF_PEAK_ON_WEEKENDS = "peak_on_weekends"
 # Value 0 = unknown/unset; 1-11 match the GTFS spec
 ALERT_EFFECT_OPTIONS = {
     "1":  "No service — full line or station suspension",
-    "2":  "Reduced service — fewer trains than normal",
+    "2":  "Reduced service — fewer services than normal",
     "3":  "Significant delays — major disruption in progress",
-    "4":  "Detour — trains taking an alternative route",
-    "5":  "Additional service — extra trains added",
+    "4":  "Detour — services taking an alternative route",
+    "5":  "Additional service — extra services added",
     "6":  "Modified service — timetable or stopping pattern changed",
     "7":  "Other effect — e.g. car park closures, lift outages",
     "8":  "Unknown effect — unclassified alert",
@@ -163,6 +163,16 @@ MODES = {
 def mode_info(mode: str) -> dict:
     """Mode table entry, defaulting to train for pre-mode config entries."""
     return MODES.get(mode or DEFAULT_MODE, MODES[DEFAULT_MODE])
+
+
+def line_phrase(mode: str, line: str) -> str:
+    """"Hurstbridge line" for trains; tram names already read "Route 58"."""
+    return line if mode == MODE_TRAM else f"{line} line"
+
+
+def vehicle_word(mode: str, plural: bool = False) -> str:
+    return ("trams" if plural else "tram") if mode == MODE_TRAM else (
+        "trains" if plural else "train")
 
 
 def routes_for_mode(mode: str) -> dict:

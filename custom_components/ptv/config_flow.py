@@ -290,6 +290,12 @@ class PTVTrainDelaysConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             description_placeholders={
                 "lines": ", ".join(self._lines),
                 "added": added,
+                "stop_word": mode_info(self._mode)["stop_word"],
+                "hint": (
+                    "Tram stops are listed with their stop number, e.g. \"#115\"."
+                    if self._mode == MODE_TRAM else
+                    "Type to search all Metro stations."
+                ),
             },
         )
 

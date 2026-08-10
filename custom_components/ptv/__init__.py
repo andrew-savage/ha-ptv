@@ -27,6 +27,7 @@ from .const import (
     DEFAULT_DELAY_THRESHOLD, DEFAULT_SCAN_INTERVAL, DEFAULT_STATION_COUNT,
     DIR_CITYBOUND, DIR_OUTBOUND, DIR_BOTH,
     CONF_MODE, DEFAULT_MODE, MODE_TRAIN, api_base_for_mode, mode_info, routes_for_mode,
+    line_phrase,
     DOMAIN, KNOWN_STOP_IDS, METRO_LINES, OCCUPANCY_LABELS,
     PROBLEM_NONE, PROBLEM_DELAYS, PROBLEM_ALERT, PROBLEM_CANCELLATIONS, PROBLEM_MAJOR,
 )
@@ -309,7 +310,7 @@ class PTVDataCoordinator(DataUpdateCoordinator):
             "worst_occupancy_int": -1,
             # Problem summary
             "problem_level": PROBLEM_NONE,
-            "problem_summary": "Hurstbridge line running normally",
+            "problem_summary": "Running normally",
             # Per-station data
             "stations": {},
         }
@@ -694,8 +695,8 @@ class PTVDataCoordinator(DataUpdateCoordinator):
             def summarise(alert_part: str) -> str:
                 parts = ([alert_part] if alert_part else []) + disruptions
                 if not parts:
-                    return f"{line} line is running normally."
-                return f"{line} line: " + "; ".join(parts) + "."
+                    return f"{line_phrase(self.mode, line)} is running normally."
+                return f"{line_phrase(self.mode, line)}: " + "; ".join(parts) + "."
 
             data["problem_summary"] = summarise(
                 data["alert_text"] if data["alert_count"] > 0 else ""

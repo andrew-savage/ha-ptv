@@ -10,9 +10,9 @@
         }
       },
       "lines": {
-        "title": "PTV – Select Lines",
+        "title": "PTV – Select Lines or Routes",
         "data": {
-          "lines": "Train Lines",
+          "lines": "Lines / Routes",
           "scan_interval": "Peak-hour polling interval (seconds)"
         }
       },
@@ -24,21 +24,21 @@
         }
       },
       "station": {
-        "title": "PTV – Add Station{added}",
-        "description": "Add a stop on {lines} to monitor. Tram stops include their stop number (e.g. \"#115\"). Select '(Done — no more stations)' when finished.",
+        "title": "PTV – Add {stop_word}{added}",
+        "description": "Add a {stop_word} on {lines} to monitor. {hint} Select '(Done — no more stations)' when finished.",
         "data": {
-          "name": "Station",
+          "name": "Station or stop",
           "directions": "Directions to monitor",
-          "count": "Number of upcoming trains to track (1–4)"
+          "count": "Number of upcoming services to track (1–4)"
         }
       }
     },
     "error": {
       "cannot_connect": "Unable to reach the PTV API.",
       "invalid_auth": "API key rejected.",
-      "no_lines_selected": "Select at least one line.",
+      "no_lines_selected": "Select at least one line or route.",
       "no_alerts_selected": "Select at least one alert type.",
-      "station_list_unavailable": "Could not download the station list from Transport Victoria (the schedule file is large and the download may have timed out). Type your station name in manually, or go back and retry.",
+      "station_list_unavailable": "Could not download the station/stop list from Transport Victoria (the schedule file is large and the download may have timed out). Type the name in manually, or go back and retry.",
       "unknown": "Unexpected error."
     },
     "abort": {
