@@ -1,7 +1,7 @@
 {
   "domain": "ptv",
   "name": "PTV",
-  "version": "0.2.0-beta.2",
+  "version": "0.2.0",
   "documentation": "https://github.com/andrew-savage/ha-ptv",
   "issue_tracker": "https://github.com/andrew-savage/ha-ptv/issues",
   "dependencies": [],

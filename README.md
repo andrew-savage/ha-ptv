@@ -107,8 +107,6 @@ The config flow has four steps:
 
 ## Trams
 
-> 🧪 **Beta.** Tram support is new and has had limited real-world testing. To receive it, enable **Show beta versions** on the PTV repository in HACS. Please report anything odd via the [issue tracker](https://github.com/andrew-savage/ha-ptv/issues).
-
 Trams are set up exactly like trains: add the integration again and choose **Tram** on the first step. Each mode gets its own entry, its own polling settings and its own schedule cache, so train and tram config never interfere.
 
 Two differences follow from how the data is published:
