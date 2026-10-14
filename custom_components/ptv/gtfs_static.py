@@ -14,6 +14,7 @@ import requests
 
 from .const import (
     GTFS_CACHE_FILE,
+    GTFS_CACHE_SCHEMA,
     GTFS_CACHE_TTL_DAYS,
     GTFS_DOWNLOAD_TIMEOUT,
     GTFS_METRO_INNER_ZIP,
@@ -21,7 +22,9 @@ from .const import (
     METRO_LINES,
     MODE_TRAIN,
     MODE_TRAM,
+    TUNNEL_SIDES,
     mode_info,
+    through_running_routes,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -131,59 +134,124 @@ def _load_direction_labels(z: zipfile.ZipFile, route_ids: set[str]) -> dict[str,
     }
 
 
+def _active_service_ids(z: zipfile.ZipFile, today_str: str, dow: str) -> set[str]:
+    active: set[str] = set()
+    with z.open("calendar.txt") as f:
+        for row in csv.DictReader(io.TextIOWrapper(f, encoding="utf-8-sig")):
+            if (row.get(dow) == "1"
+                    and row.get("start_date","") <= today_str <= row.get("end_date","")):
+                active.add(row["service_id"])
+    with z.open("calendar_dates.txt") as f:
+        for row in csv.DictReader(io.TextIOWrapper(f, encoding="utf-8-sig")):
+            if row.get("date") == today_str:
+                if row.get("exception_type") == "1":
+                    active.add(row["service_id"])
+                elif row.get("exception_type") == "2":
+                    active.discard(row["service_id"])
+    return active
+
+
+def _through_trips(z: zipfile.ZipFile, route_ids: set[str], active_sids: set[str]) -> dict[str, str]:
+    """Trips that continue the selected lines' trains through the Metro Tunnel.
+
+    Maps each such trip_id to the selected route it continues as. The two
+    halves of a train share a block_id, and every tunnel block pairs Sunbury
+    with exactly one of Pakenham or Cranbourne, so a Pakenham rider gets the
+    Sunbury trips that become Pakenham trains — not Cranbourne ones.
+    """
+    through = tuple(through_running_routes(route_ids))
+    if not through:
+        return {}
+    own = tuple(r for r in route_ids if r in TUNNEL_SIDES)
+    own_blocks: dict[tuple, str] = {}
+    candidates: list[tuple[str, tuple]] = []
+    with z.open("trips.txt") as f:
+        for row in csv.DictReader(io.TextIOWrapper(f, encoding="utf-8-sig")):
+            block = row.get("block_id")
+            if not block or row.get("service_id") not in active_sids:
+                continue
+            key = (row["service_id"], block)
+            rid = row.get("route_id", "")
+            for r in own:
+                if rid.startswith(r):
+                    own_blocks[key] = r
+            if rid.startswith(through):
+                candidates.append((row["trip_id"], key))
+    return {tid: own_blocks[key] for tid, key in candidates if key in own_blocks}
+
+
 def _load_scheduled_departures(
     metro_z: zipfile.ZipFile,
     stop_ids: set[str],
     route_ids: set[str],
     today_str: str,
     dow: str,
+    through_trips: dict[str, str] | None = None,
 ) -> list[dict]:
-    """Return all departures at stop_ids today, sorted by time."""
-    # Active service IDs
-    active_sids: set[str] = set()
-    with metro_z.open("calendar.txt") as f:
-        for row in csv.DictReader(io.TextIOWrapper(f, encoding="utf-8-sig")):
-            if (row.get(dow) == "1"
-                    and row.get("start_date","") <= today_str <= row.get("end_date","")):
-                active_sids.add(row["service_id"])
-    with metro_z.open("calendar_dates.txt") as f:
-        for row in csv.DictReader(io.TextIOWrapper(f, encoding="utf-8-sig")):
-            if row.get("date") == today_str:
-                if row.get("exception_type") == "1":
-                    active_sids.add(row["service_id"])
-                elif row.get("exception_type") == "2":
-                    active_sids.discard(row["service_id"])
+    """Return all departures at stop_ids today, sorted by time.
+
+    through_trips (from _through_trips) adds the tunnel continuations of the
+    selected lines' trains, with direction flipped to read relative to them.
+    """
+    active_sids = _active_service_ids(metro_z, today_str, dow)
 
     # Trip -> direction
     # Prefix match so route ID variants (e.g. "aus:vic:vic-02-HBE:E" express)
     # are included; base IDs end with ":" so "-R:" replacement buses never match.
     route_prefixes = tuple(route_ids)
+    through_trips = through_trips or {}
     trip_dirs: dict[str, int] = {}
+    tunnel_trips: set[str] = set()
     with metro_z.open("trips.txt") as f:
         for row in csv.DictReader(io.TextIOWrapper(f, encoding="utf-8-sig")):
-            if row.get("route_id", "").startswith(route_prefixes) and row.get("service_id") in active_sids:
-                trip_dirs[row["trip_id"]] = int(row.get("direction_id", 0))
+            if row.get("service_id") not in active_sids:
+                continue
+            rid = row.get("route_id", "")
+            direction = int(row.get("direction_id", 0))
+            if rid.startswith(route_prefixes):
+                trip_dirs[row["trip_id"]] = direction
+            elif row["trip_id"] in through_trips:
+                trip_dirs[row["trip_id"]] = 1 - direction
+            else:
+                continue
+            if any(rid.startswith(t) for t in TUNNEL_SIDES):
+                tunnel_trips.add(row["trip_id"])
 
-    # Departures at our stops
-    deps = []
+    # Departures at our stops. A tunnel trip's last stop is the Town Hall
+    # handover, where the train carries on as the next trip — that row is an
+    # arrival, and keeping it would list every train there twice.
+    rows = []
+    last_seq: dict[str, int] = {}
     with metro_z.open("stop_times.txt") as f:
         for row in csv.DictReader(io.TextIOWrapper(f, encoding="utf-8-sig")):
-            if row.get("stop_id") in stop_ids and row.get("trip_id") in trip_dirs:
-                dep_str = row.get("departure_time","") or row.get("arrival_time","")
-                if not dep_str:
-                    continue
-                try:
-                    h, m, s = dep_str.split(":")
-                    dep_sec = int(h)*3600 + int(m)*60 + int(s)
-                except ValueError:
-                    continue
-                deps.append({
-                    "dep_seconds": dep_sec,
-                    "direction_id": trip_dirs[row["trip_id"]],
-                    "trip_id": row["trip_id"],
-                    "stop_id": row["stop_id"],
-                    "dep_str": dep_str,
-                })
+            tid = row.get("trip_id")
+            if tid in tunnel_trips:
+                seq = int(row.get("stop_sequence") or 0)
+                if seq > last_seq.get(tid, -1):
+                    last_seq[tid] = seq
+            if row.get("stop_id") in stop_ids and tid in trip_dirs:
+                rows.append(row)
+
+    deps = []
+    for row in rows:
+        tid = row["trip_id"]
+        if tid in tunnel_trips and int(row.get("stop_sequence") or 0) == last_seq.get(tid):
+            continue
+        dep_str = row.get("departure_time","") or row.get("arrival_time","")
+        if not dep_str:
+            continue
+        try:
+            h, m, s = dep_str.split(":")
+            dep_sec = int(h)*3600 + int(m)*60 + int(s)
+        except ValueError:
+            continue
+        deps.append({
+            "dep_seconds": dep_sec,
+            "direction_id": trip_dirs[tid],
+            "trip_id": tid,
+            "stop_id": row["stop_id"],
+            "dep_str": dep_str,
+        })
     deps.sort(key=lambda x: x["dep_seconds"])
     return deps
 
@@ -210,7 +278,8 @@ def download_and_cache_gtfs(
             cached_at = datetime.fromisoformat(cache.get("cached_at","2000-01-01"))
             age_days = (datetime.now(timezone.utc) - cached_at.replace(tzinfo=timezone.utc)).days
             # Return immediately if cache is fresh and covers all stations
-            if age_days < GTFS_CACHE_TTL_DAYS and cache.get("cached_date") == today_str:
+            if (age_days < GTFS_CACHE_TTL_DAYS and cache.get("cached_date") == today_str
+                    and cache.get("schema") == GTFS_CACHE_SCHEMA):
                 cached_stations = set(cache.get("scheduled_by_station", {}).keys())
                 if all(s.lower() in cached_stations for s in station_names):
                     _LOGGER.debug("Using cached GTFS data (age %d days)", age_days)
@@ -246,6 +315,8 @@ def download_and_cache_gtfs(
     direction_labels = _load_direction_labels(metro_z, route_ids)
 
     dow = datetime.now().astimezone().strftime("%A").lower()
+    through_trips = _through_trips(
+        metro_z, route_ids, _active_service_ids(metro_z, today_str, dow))
 
     # Load scheduled departures for each requested station
     scheduled_by_station: dict[str, list] = {}
@@ -259,7 +330,8 @@ def download_and_cache_gtfs(
                     break
         if entry:
             stop_ids = set(entry["stop_ids"])
-            deps = _load_scheduled_departures(metro_z, stop_ids, route_ids, today_str, dow)
+            deps = _load_scheduled_departures(
+                metro_z, stop_ids, route_ids, today_str, dow, through_trips)
             scheduled_by_station[key] = deps
             _LOGGER.info("Loaded %d departures for %s", len(deps), station_name)
         else:
@@ -269,9 +341,11 @@ def download_and_cache_gtfs(
     cache = {
         "cached_at": datetime.now(timezone.utc).isoformat(),
         "cached_date": today_str,
+        "schema": GTFS_CACHE_SCHEMA,
         "mode": mode,
         "stops": stops,
         "direction_labels": direction_labels,
+        "through_trips": through_trips,
         "scheduled_by_station": scheduled_by_station,
     }
 

@@ -278,8 +278,9 @@ Use `live_alert_count` for "is something wrong right now", and `alert_count` for
 
 ## Notes
 
+- **Metro Tunnel stations** (Arden, Parkville, State Library, Town Hall, Anzac) work for Sunbury, Pakenham and Cranbourne. Trains run straight through the tunnel, but PTV's timetable splits each one at Town Hall into a trip on each line — so the integration follows each of your line's trains through to the other side. Directions are relative to your line: for a Pakenham rider at Parkville, *citybound* means continuing west towards Sunbury, and *outbound* means heading back to Pakenham.
 - The trip updates feed does **not** include rail replacement buses, platform changes, or route deviations
-- The static timetable cache refreshes daily at midnight and every 3 days regardless
+- The static timetable is reloaded on the first poll after midnight, so scheduled departures always come from the current day's services. If that download fails, the previous day's timetable stays in use and it retries hourly
 - Express services are identified from the realtime feed's route ID; the static timetable has no equivalent marker
 - A few PTV stop records are named after their platform number rather than their station. These are filtered out, so the station list matches PTV's own count of 226 stations
 

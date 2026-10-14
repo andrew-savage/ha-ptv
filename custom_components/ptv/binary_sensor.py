@@ -7,7 +7,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .sensor import _ic, _is_tram
+from .sensor import _device, _ic, _is_tram
 from .const import CONF_LINES, DOMAIN
 from . import PTVDataCoordinator
 
@@ -31,13 +31,6 @@ async def async_setup_entry(
 def _ld(coordinator, line):
     return coordinator.data.get(line, {}) if coordinator.data else {}
 
-def _device(line):
-    return {
-        "identifiers": {(DOMAIN, f"ptv_{line.lower().replace(' ','_')}")},
-        "name": f"PTV {line} Line",
-        "manufacturer": "Transport Victoria",
-        "model": "GTFS Realtime",
-    }
 
 
 class PTVDelayBinarySensor(CoordinatorEntity, BinarySensorEntity):

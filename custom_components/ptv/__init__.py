@@ -27,7 +27,7 @@ from .const import (
     DEFAULT_DELAY_THRESHOLD, DEFAULT_SCAN_INTERVAL, DEFAULT_STATION_COUNT,
     DIR_CITYBOUND, DIR_OUTBOUND, DIR_BOTH,
     CONF_MODE, DEFAULT_MODE, MODE_TRAIN, api_base_for_mode, mode_info, routes_for_mode,
-    line_phrase,
+    line_phrase, TUNNEL_SIDES,
     DOMAIN, KNOWN_STOP_IDS, METRO_LINES, OCCUPANCY_LABELS,
     PROBLEM_NONE, PROBLEM_DELAYS, PROBLEM_ALERT, PROBLEM_CANCELLATIONS, PROBLEM_MAJOR,
 )
@@ -44,6 +44,10 @@ OVERNIGHT_MIN_SPAN = timedelta(hours=24)
 OVERNIGHT_PHRASES = ("each night", "every night", "each evening")
 # Trains have finished by this hour, so the nightly window is start -> 4am.
 END_OF_SERVICE_HOUR = 4
+# How old a feed may be before a failed request fails the update.
+FEED_MAX_STALE = timedelta(minutes=15)
+# Wait between attempts when the daily timetable refresh fails.
+GTFS_REFRESH_RETRY = timedelta(hours=1)
 
 
 def _overnight_window(alert_text: str, start_ts: int, end_ts: int) -> str | None:
@@ -191,11 +195,14 @@ class PTVDataCoordinator(DataUpdateCoordinator):
         self.api_key = api_key
         self.mode = mode
         self.api_base = api_base_for_mode(mode)
+        self._last_feeds: dict[str, tuple[bytes, datetime]] = {}
+        self._stale_feeds: set[str] = set()
         self.monitored_lines = monitored_lines
         self.alert_effects = alert_effects        # set of int effect values to include
         self.stations_config = stations_config   # list of {name, directions, count}
         self.station_stop_ids = station_stop_ids  # key -> {stop_ids, citybound_stop_ids, outbound_stop_ids}
         self.gtfs_cache = gtfs_cache
+        self._gtfs_retry_after: datetime | None = None
         self.polling = {
             CONF_SCAN_INTERVAL: scan_interval,
             CONF_OFFPEAK_INTERVAL: DEFAULT_OFFPEAK_INTERVAL,
@@ -242,13 +249,73 @@ class PTVDataCoordinator(DataUpdateCoordinator):
         return midnight + timedelta(seconds=secs)
 
     def _fetch_feed(self, path: str) -> bytes:
-        resp = requests.get(
-            f"{self.api_base}{path}",
-            headers={API_HEADER_KEY: self.api_key},
-            timeout=30,
-        )
-        resp.raise_for_status()
+        """Fetch a feed, falling back to its last good copy on a blip.
+
+        The PTV API occasionally stalls on a single request. Failing the
+        whole update for that marks every entity unavailable, which breaks
+        any automation that happens to run then. A copy up to
+        FEED_MAX_STALE old is still accurate enough: the parsers drop
+        departures already in the past.
+        """
+        try:
+            resp = requests.get(
+                f"{self.api_base}{path}",
+                headers={API_HEADER_KEY: self.api_key},
+                timeout=(10, 25),
+            )
+            resp.raise_for_status()
+        except requests.RequestException as err:
+            cached = self._last_feeds.get(path)
+            if cached and datetime.now(timezone.utc) - cached[1] < FEED_MAX_STALE:
+                if path not in self._stale_feeds:
+                    _LOGGER.warning(
+                        "PTV %s request failed (%s); using data from %s ago",
+                        path, err, datetime.now(timezone.utc) - cached[1],
+                    )
+                    self._stale_feeds.add(path)
+                return cached[0]
+            raise
+        if path in self._stale_feeds:
+            _LOGGER.info("PTV %s recovered", path)
+            self._stale_feeds.discard(path)
+        self._last_feeds[path] = (resp.content, datetime.now(timezone.utc))
         return resp.content
+
+    async def _async_refresh_timetable(self) -> None:
+        """Reload the static timetable once the day has rolled over.
+
+        It is loaded at setup and holds that day's services only, so without
+        this, departures after midnight would keep coming from the day Home
+        Assistant started — a weekday timetable on a Saturday, for instance.
+        """
+        if not self.gtfs_cache or not self.stations_config:
+            return
+        now = datetime.now().astimezone()
+        if self.gtfs_cache.get("cached_date") == now.strftime("%Y%m%d"):
+            return
+        if self._gtfs_retry_after and now < self._gtfs_retry_after:
+            return
+        routes = routes_for_mode(self.mode)
+        try:
+            cache = await self.hass.async_add_executor_job(
+                download_and_cache_gtfs,
+                self.hass.config.config_dir,
+                [s[CONF_STATION_NAME] for s in self.stations_config],
+                {routes[l] for l in self.monitored_lines if l in routes},
+                self.mode,
+            )
+        except Exception as err:
+            # Keep yesterday's timetable rather than none, and don't retry the
+            # ~230 MB download on every poll.
+            _LOGGER.warning("Daily timetable refresh failed: %s", err)
+            self._gtfs_retry_after = now + GTFS_REFRESH_RETRY
+            return
+        self._gtfs_retry_after = None
+        if cache.get("cached_date") != now.strftime("%Y%m%d"):
+            # download_and_cache_gtfs fell back to a stale copy
+            self._gtfs_retry_after = now + GTFS_REFRESH_RETRY
+        self.gtfs_cache = cache
+        _LOGGER.info("Timetable refreshed for %s", cache.get("cached_date"))
 
     async def _async_update_data(self) -> dict:
         # _schedule_refresh re-reads this after every poll, so retuning here
@@ -257,6 +324,7 @@ class PTVDataCoordinator(DataUpdateCoordinator):
         if interval != self.update_interval:
             _LOGGER.debug("Polling interval now %s", interval)
             self.update_interval = interval
+        await self._async_refresh_timetable()
         try:
             trip_raw, alerts_raw, pos_raw = await self.hass.async_add_executor_job(
                 lambda: (
@@ -343,6 +411,42 @@ class PTVDataCoordinator(DataUpdateCoordinator):
     # Trip updates
     # ------------------------------------------------------------------ #
 
+    def _station_hits(self, stus, direction_id, is_express, now_utc):
+        """First future stop at each configured station for one trip.
+
+        Returns ({station_key: hit or None}, the trip's worst delay).
+        """
+        hits: dict[str, dict | None] = {
+            scfg[CONF_STATION_NAME].lower(): None for scfg in self.stations_config
+        }
+        trip_max_delay = 0
+        for stu in stus:
+            delay = 0
+            dep_time = None
+            if stu.HasField("departure"):
+                delay = stu.departure.delay or 0
+                if stu.departure.time:
+                    dep_time = datetime.fromtimestamp(stu.departure.time, tz=timezone.utc)
+            elif stu.HasField("arrival"):
+                delay = stu.arrival.delay or 0
+                if stu.arrival.time:
+                    dep_time = datetime.fromtimestamp(stu.arrival.time, tz=timezone.utc)
+            trip_max_delay = max(trip_max_delay, delay)
+            if not dep_time or dep_time <= now_utc:
+                continue
+            for key in hits:
+                if hits[key] is not None:
+                    continue  # already found for this trip
+                info = self.station_stop_ids.get(key, {})
+                # Use direction-specific stop IDs if available
+                if direction_id == 1:
+                    stop_ids = info.get("citybound_stop_ids", info.get("stop_ids", []))
+                else:
+                    stop_ids = info.get("outbound_stop_ids", info.get("stop_ids", []))
+                if stu.stop_id in stop_ids:
+                    hits[key] = {"actual": dep_time, "delay_sec": delay, "is_express": is_express}
+        return hits, trip_max_delay
+
     def _parse_trip_updates(self, raw, route_map, results):
         feed = gtfs_realtime_pb2.FeedMessage()
         feed.ParseFromString(raw)
@@ -355,6 +459,12 @@ class PTVDataCoordinator(DataUpdateCoordinator):
             for scfg in self.stations_config:
                 key = scfg[CONF_STATION_NAME].lower()
                 rt_buckets[line][key] = {0: [], 1: []}
+
+        # Tunnel trains are split at Town Hall: a Pakenham line's trains carry
+        # on as Sunbury trips (and vice versa). Those continuations, linked by
+        # block in the timetable, feed the line's station departures with
+        # direction flipped — but not its delay or cancellation stats.
+        through_trips = (self.gtfs_cache or {}).get("through_trips", {})
 
         for entity in feed.entity:
             if not entity.HasField("trip_update"):
@@ -370,63 +480,38 @@ class PTVDataCoordinator(DataUpdateCoordinator):
                         line = lname
                         is_express = True
                         break
-            if line is None:
-                continue
-            data = results[line]
             trip_id = tu.trip.trip_id
+            continues_as = route_map.get(through_trips.get(trip_id, ""))
+            continuing = [continues_as] if continues_as and continues_as != line else []
+            if line is None and not continuing:
+                continue
             direction_id = tu.trip.direction_id
 
             # 3=CANCELED, 5=DELETED
             if tu.trip.schedule_relationship in (3, 5):
-                data["cancelled_trips"].append(trip_id)
-                data["has_cancellations"] = True
+                if line is not None:
+                    results[line]["cancelled_trips"].append(trip_id)
+                    results[line]["has_cancellations"] = True
                 continue
 
+            # A citybound tunnel trip ends at the Town Hall handover, where the
+            # train continues as another trip; that final stop is an arrival.
+            stus = list(tu.stop_time_update)
+            if direction_id == 1 and stus and any(route_id.startswith(r) for r in TUNNEL_SIDES):
+                stus = stus[:-1]
+
+            targets = ([(line, direction_id)] if line is not None else []) + \
+                [(l, 1 - direction_id) for l in continuing]
             trip_max_delay = 0
-            # Per-station: first future stop_time_update matching this station
-            station_hits: dict[str, dict | None] = {
-                scfg[CONF_STATION_NAME].lower(): None
-                for scfg in self.stations_config
-            }
+            for tline, tdir in targets:
+                hits, trip_max_delay = self._station_hits(stus, tdir, is_express, now_utc)
+                for key, hit in hits.items():
+                    if hit:
+                        rt_buckets[tline][key][tdir].append(hit)
 
-            for stu in tu.stop_time_update:
-                delay = 0
-                dep_time = None
-
-                if stu.HasField("departure"):
-                    delay = stu.departure.delay or 0
-                    if stu.departure.time:
-                        dep_time = datetime.fromtimestamp(stu.departure.time, tz=timezone.utc)
-                elif stu.HasField("arrival"):
-                    delay = stu.arrival.delay or 0
-                    if stu.arrival.time:
-                        dep_time = datetime.fromtimestamp(stu.arrival.time, tz=timezone.utc)
-
-                trip_max_delay = max(trip_max_delay, delay)
-
-                if dep_time and dep_time > now_utc:
-                    for scfg in self.stations_config:
-                        key = scfg[CONF_STATION_NAME].lower()
-                        if station_hits[key] is not None:
-                            continue  # already found for this trip
-                        info = self.station_stop_ids.get(key, {})
-                        # Use direction-specific stop IDs if available
-                        if direction_id == 1:
-                            stop_ids = set(info.get("citybound_stop_ids", info.get("stop_ids", [])))
-                        else:
-                            stop_ids = set(info.get("outbound_stop_ids", info.get("stop_ids", [])))
-                        if stu.stop_id in stop_ids:
-                            station_hits[key] = {
-                                "actual": dep_time,
-                                "delay_sec": delay,
-                                "is_express": is_express,
-                            }
-
-            # Record station hits into buckets
-            for key, hit in station_hits.items():
-                if hit:
-                    rt_buckets[line][key][direction_id].append(hit)
-
+            if line is None:
+                continue
+            data = results[line]
             # Record line-level delay
             if trip_max_delay >= DEFAULT_DELAY_THRESHOLD:
                 data["delayed_trips"].append({"trip_id": trip_id, "delay_seconds": trip_max_delay})

@@ -19,6 +19,9 @@ GTFS_STATIC_URL = (
 )
 GTFS_CACHE_FILE = "ptv_gtfs_cache.json"
 GTFS_CACHE_TTL_DAYS = 3
+# Bump when cached content changes meaning, so old caches are rebuilt.
+# 2: Metro Tunnel through-running departures.
+GTFS_CACHE_SCHEMA = 2
 GTFS_DOWNLOAD_TIMEOUT = 420
 GTFS_METRO_INNER_ZIP = "2/google_transit.zip"
 GTFS_TRAM_INNER_ZIP = "3/google_transit.zip"
@@ -105,6 +108,33 @@ METRO_LINES = {
     "Werribee":      "aus:vic:vic-02-WER:",
     "Williamstown":  "aus:vic:vic-02-WIL:",
 }
+
+# Metro Tunnel through-running. Each train runs Sunbury <-> Pakenham/Cranbourne,
+# but the timetable splits it at Town Hall into two trips: citybound (dir 1)
+# into Town Hall on one line, then outbound (dir 0) on a line from the other
+# side. So Pakenham trips never stop at Arden/Parkville/State Library and
+# Sunbury trips never stop at Anzac. Confirmed 2026-10-14.
+TUNNEL_SIDES = {
+    "aus:vic:vic-02-SUY:": "west",
+    "aus:vic:vic-02-PKM:": "east",
+    "aus:vic:vic-02-CBE:": "east",
+}
+
+
+def through_running_routes(route_ids) -> set[str]:
+    """Routes whose trips continue the given routes' trains through the tunnel.
+
+    Their direction is reversed relative to the given routes: a Sunbury
+    citybound trip at State Library is a train heading out to Pakenham.
+    Empty when the selection already spans both sides (nothing is missing)
+    or touches neither.
+    """
+    sides = {TUNNEL_SIDES[r] for r in route_ids if r in TUNNEL_SIDES}
+    if len(sides) != 1:
+        return set()
+    (side,) = sides
+    return {r for r, s in TUNNEL_SIDES.items() if s != side}
+
 
 # Tram route IDs — confirmed 2026-08-05
 TRAM_ROUTES = {
