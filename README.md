@@ -156,6 +156,8 @@ A ready-to-use blueprint is included at `blueprints/ptv_commute_notifications.ya
 | Active days | Which days of the week to fire |
 | Mention tonight's planned works | Show overnight works under a "🌙 Tonight" line (default on) |
 | Service type | Train, Tram or Bus — sets the wording and icons (default Train) |
+| Pause notifications with | Optional helper, e.g. a holiday-mode `input_boolean`. No notifications are sent while it's in the chosen state |
+| Pause while the helper is | On (holiday-mode toggle) or Off ("notifications enabled" toggle). Default On |
 | Also trigger on these entities | Optional helpers/entities that also send a notification |
 | What those entities send | Departure reminder, line status, or both |
 

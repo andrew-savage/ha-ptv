@@ -22,6 +22,9 @@ blueprint:
     alarm helper. Set "Also trigger on these entities" and choose what they
     send.
 
+    To pause everything while you're away, choose a helper such as a
+    holiday-mode input_boolean under "Pause notifications with".
+
     To test without waiting, open the automation and choose "Run actions"
     (⋮ menu). That sends both notifications immediately using live data,
     and ignores the day filter.
@@ -102,6 +105,35 @@ blueprint:
               value: tram
             - label: Bus
               value: bus
+
+    # ── Pause ────────────────────────────────────────────────────────────────
+    pause_entities:
+      name: Pause notifications with
+      description: >
+        Optional. A helper such as a holiday-mode input_boolean. While it is in
+        the state chosen below, no notifications are sent — scheduled or from
+        the extra triggers. "Run actions" still works, so you can test while
+        paused.
+      default: []
+      selector:
+        entity:
+          multiple: true
+          domain:
+            - input_boolean
+            - binary_sensor
+            - switch
+
+    pause_when:
+      name: Pause while the helper is
+      description: '"On" suits a holiday-mode toggle; "Off" suits a "notifications enabled" toggle.'
+      default: "on"
+      selector:
+        select:
+          options:
+            - label: "On"
+              value: "on"
+            - label: "Off"
+              value: "off"
 
     # ── Extra triggers ───────────────────────────────────────────────────────
     trigger_entities:
@@ -222,6 +254,11 @@ trigger:
 condition:
   - condition: time
     weekday: !input weekdays
+  # Paused while any chosen helper is in the pause state. No helpers chosen
+  # means never paused.
+  - condition: template
+    value_template: >-
+      {{ pause_entities | select('is_state', pause_when) | list | count == 0 }}
 
 # ── Actions ─────────────────────────────────────────────────────────────────
 variables:
@@ -235,6 +272,8 @@ variables:
   notify_service: !input notify_service
   mention_overnight_works: !input mention_overnight_works
   trigger_sends: !input trigger_sends
+  pause_entities: !input pause_entities
+  pause_when: !input pause_when
   service_type: !input service_type
   vehicle_plural: >-
     {{ {'train': 'trains', 'tram': 'trams', 'bus': 'buses'}.get(service_type, 'services') }}
