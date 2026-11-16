@@ -22,6 +22,12 @@ content: >-
 
   ---
 
+  **Citybound:** {{ states('sensor.ptv_hurstbridge_line_citybound_status') }}
+
+  **Outbound:** {{ states('sensor.ptv_hurstbridge_line_outbound_status') }}
+
+  ---
+
   ### Ivanhoe → City
 
   | # | Time | Status |

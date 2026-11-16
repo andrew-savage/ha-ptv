@@ -180,6 +180,35 @@ def _through_trips(z: zipfile.ZipFile, route_ids: set[str], active_sids: set[str
     return {tid: own_blocks[key] for tid, key in candidates if key in own_blocks}
 
 
+def _trip_directions(
+    z: zipfile.ZipFile,
+    route_ids: set[str],
+    through_trips: dict[str, str],
+    active_sids: set[str],
+) -> dict[str, int]:
+    """Map trip_id -> the trip's own GTFS direction_id.
+
+    PTV's realtime trip updates leave trip.direction_id unset, and protobuf
+    then reads it as 0 (outbound), so the realtime parser looks directions up
+    here instead. Covers every trip of the selected routes and their tunnel
+    continuations, not just those calling at configured stations. Directions
+    are as published: through trips are not flipped.
+    """
+    prefixes = tuple(route_ids)
+    dirs: dict[str, int] = {}
+    with z.open("trips.txt") as f:
+        for row in csv.DictReader(io.TextIOWrapper(f, encoding="utf-8-sig")):
+            if row.get("service_id") not in active_sids:
+                continue
+            tid = row["trip_id"]
+            if row.get("route_id", "").startswith(prefixes) or tid in through_trips:
+                try:
+                    dirs[tid] = int(row.get("direction_id") or 0)
+                except ValueError:
+                    continue
+    return dirs
+
+
 def _load_scheduled_departures(
     metro_z: zipfile.ZipFile,
     stop_ids: set[str],
@@ -314,9 +343,15 @@ def download_and_cache_gtfs(
     stops = _load_stops(metro_z, mode)
     direction_labels = _load_direction_labels(metro_z, route_ids)
 
-    dow = datetime.now().astimezone().strftime("%A").lower()
-    through_trips = _through_trips(
-        metro_z, route_ids, _active_service_ids(metro_z, today_str, dow))
+    now = datetime.now().astimezone()
+    dow = now.strftime("%A").lower()
+    yesterday = now - timedelta(days=1)
+    # Yesterday's services too: trips that run past midnight (times beyond
+    # 24:00:00) belong to the previous service day but are still in the feed.
+    active_sids = _active_service_ids(metro_z, today_str, dow) | _active_service_ids(
+        metro_z, yesterday.strftime("%Y%m%d"), yesterday.strftime("%A").lower())
+    through_trips = _through_trips(metro_z, route_ids, active_sids)
+    trip_directions = _trip_directions(metro_z, route_ids, through_trips, active_sids)
 
     # Load scheduled departures for each requested station
     scheduled_by_station: dict[str, list] = {}
@@ -346,6 +381,7 @@ def download_and_cache_gtfs(
         "stops": stops,
         "direction_labels": direction_labels,
         "through_trips": through_trips,
+        "trip_directions": trip_directions,
         "scheduled_by_station": scheduled_by_station,
     }
 
