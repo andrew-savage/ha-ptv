@@ -411,27 +411,66 @@ class PTVDataCoordinator(DataUpdateCoordinator):
     # Trip updates
     # ------------------------------------------------------------------ #
 
+    @staticmethod
+    def _stu_delay(stu) -> int:
+        if stu.HasField("departure"):
+            return stu.departure.delay or 0
+        if stu.HasField("arrival"):
+            return stu.arrival.delay or 0
+        return 0
+
+    def _platform_directions(self) -> dict[str, int]:
+        """Map platform stop_id -> direction, for platforms the timetable
+        shows serving one direction only (terminus platforms are left out).
+
+        Last resort for a realtime trip whose direction is in neither the feed
+        nor trip_directions, e.g. one added on the day.
+        """
+        cache = self.gtfs_cache or {}
+        through = cache.get("through_trips", {})
+        seen: dict[str, set[int]] = {}
+        for deps in cache.get("scheduled_by_station", {}).values():
+            for dep in deps:
+                # Through trips are stored with direction flipped to read
+                # relative to the selected line; only use the line's own trips.
+                if dep.get("trip_id") in through:
+                    continue
+                seen.setdefault(dep["stop_id"], set()).add(dep["direction_id"])
+        return {sid: next(iter(d)) for sid, d in seen.items() if len(d) == 1}
+
+    def _trip_direction(self, tu, trip_dirs, platform_dirs) -> int | None:
+        """The trip's direction_id, or None if it can't be determined.
+
+        PTV's metro trip updates omit trip.direction_id, which protobuf then
+        reads as 0 (outbound), so only trust it when it is actually set.
+        """
+        if tu.trip.HasField("direction_id"):
+            return tu.trip.direction_id
+        direction = trip_dirs.get(tu.trip.trip_id)
+        if direction is not None:
+            return direction
+        for stu in tu.stop_time_update:
+            if stu.stop_id in platform_dirs:
+                return platform_dirs[stu.stop_id]
+        return None
+
     def _station_hits(self, stus, direction_id, is_express, now_utc):
         """First future stop at each configured station for one trip.
 
-        Returns ({station_key: hit or None}, the trip's worst delay).
+        Returns {station_key: hit or None}.
         """
         hits: dict[str, dict | None] = {
             scfg[CONF_STATION_NAME].lower(): None for scfg in self.stations_config
         }
-        trip_max_delay = 0
         for stu in stus:
-            delay = 0
+            delay = self._stu_delay(stu)
             dep_time = None
             if stu.HasField("departure"):
-                delay = stu.departure.delay or 0
                 if stu.departure.time:
                     dep_time = datetime.fromtimestamp(stu.departure.time, tz=timezone.utc)
             elif stu.HasField("arrival"):
-                delay = stu.arrival.delay or 0
                 if stu.arrival.time:
                     dep_time = datetime.fromtimestamp(stu.arrival.time, tz=timezone.utc)
-            trip_max_delay = max(trip_max_delay, delay)
             if not dep_time or dep_time <= now_utc:
                 continue
             for key in hits:
@@ -445,7 +484,7 @@ class PTVDataCoordinator(DataUpdateCoordinator):
                     stop_ids = info.get("outbound_stop_ids", info.get("stop_ids", []))
                 if stu.stop_id in stop_ids:
                     hits[key] = {"actual": dep_time, "delay_sec": delay, "is_express": is_express}
-        return hits, trip_max_delay
+        return hits
 
     def _parse_trip_updates(self, raw, route_map, results):
         feed = gtfs_realtime_pb2.FeedMessage()
@@ -465,6 +504,10 @@ class PTVDataCoordinator(DataUpdateCoordinator):
         # block in the timetable, feed the line's station departures with
         # direction flipped — but not its delay or cancellation stats.
         through_trips = (self.gtfs_cache or {}).get("through_trips", {})
+        trip_dirs = (self.gtfs_cache or {}).get("trip_directions", {})
+        handover_stops = set(get_stop_ids(self.gtfs_cache or {}, "Town Hall"))
+        platform_dirs = self._platform_directions()
+        unknown_direction = 0
 
         for entity in feed.entity:
             if not entity.HasField("trip_update"):
@@ -485,7 +528,7 @@ class PTVDataCoordinator(DataUpdateCoordinator):
             continuing = [continues_as] if continues_as and continues_as != line else []
             if line is None and not continuing:
                 continue
-            direction_id = tu.trip.direction_id
+            direction_id = self._trip_direction(tu, trip_dirs, platform_dirs)
 
             # 3=CANCELED, 5=DELETED
             if tu.trip.schedule_relationship in (3, 5):
@@ -496,15 +539,25 @@ class PTVDataCoordinator(DataUpdateCoordinator):
 
             # A citybound tunnel trip ends at the Town Hall handover, where the
             # train continues as another trip; that final stop is an arrival.
+            # Updates often stop short of it (at State Library, or further out
+            # before the train has full predictions), so only drop a last
+            # stop that really is Town Hall.
             stus = list(tu.stop_time_update)
-            if direction_id == 1 and stus and any(route_id.startswith(r) for r in TUNNEL_SIDES):
+            if (direction_id == 1 and stus and stus[-1].stop_id in handover_stops
+                    and any(route_id.startswith(r) for r in TUNNEL_SIDES)):
                 stus = stus[:-1]
+            trip_max_delay = max((self._stu_delay(stu) for stu in stus), default=0)
 
-            targets = ([(line, direction_id)] if line is not None else []) + \
-                [(l, 1 - direction_id) for l in continuing]
-            trip_max_delay = 0
+            if direction_id is None:
+                # Guessing would put the train under the wrong direction's
+                # departures; it still counts towards the line's delays.
+                unknown_direction += 1
+                targets = []
+            else:
+                targets = ([(line, direction_id)] if line is not None else []) + \
+                    [(l, 1 - direction_id) for l in continuing]
             for tline, tdir in targets:
-                hits, trip_max_delay = self._station_hits(stus, tdir, is_express, now_utc)
+                hits = self._station_hits(stus, tdir, is_express, now_utc)
                 for key, hit in hits.items():
                     if hit:
                         rt_buckets[tline][key][tdir].append(hit)
@@ -518,6 +571,12 @@ class PTVDataCoordinator(DataUpdateCoordinator):
                 data["delay_count"] += 1
                 data["max_delay_seconds"] = max(data["max_delay_seconds"], trip_max_delay)
                 data["has_delays"] = True
+
+        if unknown_direction:
+            _LOGGER.debug(
+                "%d realtime trips had no known direction; left out of departures",
+                unknown_direction,
+            )
 
         # Sort and store realtime departures per station/direction
         for line in self.monitored_lines:
