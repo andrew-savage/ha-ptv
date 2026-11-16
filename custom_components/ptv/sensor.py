@@ -45,6 +45,12 @@ async def async_setup_entry(
         # "Unknown" forever — omit it rather than ship a dead entity.
         if not _is_tram(coordinator):
             entities.append(PTVOccupancySensor(coordinator, line))
+        # Per-direction delay and status, for directions a station is set up for
+        for direction in configured_directions(stations_config):
+            entities += [
+                PTVMaxDelaySensor(coordinator, line, direction),
+                PTVStatusSensor(coordinator, line, direction),
+            ]
         # Per-station sensors
         for scfg in stations_config:
             name = scfg[CONF_STATION_NAME]
@@ -65,6 +71,22 @@ async def async_setup_entry(
 
 def _ld(coordinator, line):
     return coordinator.data.get(line, {}) if coordinator.data else {}
+
+def _stats(coordinator, line, direction=None):
+    """Delay/cancellation stats for the whole line, or one direction of it."""
+    data = _ld(coordinator, line)
+    return data.get("by_direction", {}).get(direction, {}) if direction else data
+
+def configured_directions(stations_config) -> list[str]:
+    """Directions that at least one configured station monitors."""
+    wanted = {scfg.get(CONF_STATION_DIRECTIONS, DIR_BOTH) for scfg in stations_config}
+    return [
+        d for d in (DIR_CITYBOUND, DIR_OUTBOUND)
+        if d in wanted or DIR_BOTH in wanted
+    ]
+
+def _dir_suffix(direction) -> str:
+    return f"_{direction}" if direction else ""
 
 def _sd(coordinator, line, station_key):
     return _ld(coordinator, line).get("stations", {}).get(station_key, {})
@@ -153,16 +175,29 @@ class PTVMaxDelaySensor(CoordinatorEntity, SensorEntity):
     _attr_native_unit_of_measurement = UnitOfTime.MINUTES
     _attr_state_class = SensorStateClass.MEASUREMENT
 
-    def __init__(self, coordinator, line):
+    def __init__(self, coordinator, line, direction=None):
         super().__init__(coordinator)
         self._line = line
+        self._direction = direction  # None = whole line
         slug = line.lower().replace(" ","_")
-        self._attr_unique_id = f"ptv_{slug}_max_delay"
-        self._attr_name = f"PTV {_line_label(coordinator, line)}Max Delay"
+        self._attr_unique_id = f"ptv_{slug}{_dir_suffix(direction)}_max_delay"
+        dir_name = f"{_direction_label(coordinator, line, direction)} " if direction else ""
+        self._attr_name = f"PTV {_line_label(coordinator, line)}{dir_name}Max Delay"
 
     @property
     def native_value(self):
-        return round(_ld(self.coordinator, self._line).get("max_delay_seconds", 0) / 60, 1)
+        return round(_stats(self.coordinator, self._line, self._direction).get("max_delay_seconds", 0) / 60, 1)
+
+    @property
+    def extra_state_attributes(self):
+        if not self._direction:
+            return None
+        st = _stats(self.coordinator, self._line, self._direction)
+        return {
+            "direction": self._direction,
+            "delay_count": st.get("delay_count", 0),
+            "cancelled_count": len(st.get("cancelled_trips", [])),
+        }
 
     @property
     def icon(self):
@@ -176,15 +211,45 @@ class PTVMaxDelaySensor(CoordinatorEntity, SensorEntity):
 
 
 class PTVStatusSensor(CoordinatorEntity, SensorEntity):
-    def __init__(self, coordinator, line):
+    def __init__(self, coordinator, line, direction=None):
         super().__init__(coordinator)
         self._line = line
+        self._direction = direction  # None = whole line
         slug = line.lower().replace(" ","_")
-        self._attr_unique_id = f"ptv_{slug}_status"
-        self._attr_name = f"PTV {_line_label(coordinator, line)}Status"
+        self._attr_unique_id = f"ptv_{slug}{_dir_suffix(direction)}_status"
+        self._dir_label = _direction_label(coordinator, line, direction) if direction else ""
+        dir_name = f"{self._dir_label} " if direction else ""
+        self._attr_name = f"PTV {_line_label(coordinator, line)}{dir_name}Status"
+
+    def _direction_status(self) -> str:
+        """e.g. "Sunbury citybound: delays up to 6 min; 8:21 PM (6 min late)".
+
+        Alerts are left out: PTV publishes them for the whole line, without
+        a direction, so they are on the line status sensor only.
+        """
+        st = _stats(self.coordinator, self._line, self._direction)
+        # "Citybound" -> "citybound"; trams' "To Box Hill" -> "to Box Hill"
+        label = self._dir_label[:1].lower() + self._dir_label[1:]
+        parts = []
+        if st.get("has_cancellations"):
+            parts.append(f"{len(st.get('cancelled_trips', []))} cancelled")
+        if st.get("has_delays"):
+            parts.append(f"delays up to {round(st.get('max_delay_seconds', 0) / 60)} min")
+        # Next departure in this direction, from the first station with one
+        for station in _ld(self.coordinator, self._line).get("stations", {}).values():
+            deps = station.get(self._direction, [])
+            if deps:
+                dep = deps[0]
+                parts.append(_fmt(dep["dt_iso"], dep["delay_sec"], dep["is_realtime"], dep.get("is_express", False)))
+                break
+        if not st.get("has_cancellations") and not st.get("has_delays"):
+            parts.insert(0, "running normally")
+        return f"{self._line} {label}: " + "; ".join(parts)
 
     @property
     def native_value(self):
+        if self._direction:
+            return self._direction_status()
         data = _ld(self.coordinator, self._line)
         # Build inline status (alerts + delays + next citybound from first station)
         parts = []
@@ -208,6 +273,11 @@ class PTVStatusSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def icon(self):
+        if self._direction:
+            st = _stats(self.coordinator, self._line, self._direction)
+            if st.get("has_cancellations"): return _ic(self.coordinator, "mdi:train-car-remove")
+            if st.get("has_delays"):        return _ic(self.coordinator, "mdi:train-alert")
+            return _ic(self.coordinator, "mdi:train")
         level = _ld(self.coordinator, self._line).get("problem_level","none")
         if level in ("major","cancellations"): return _ic(self.coordinator, "mdi:train-car-remove")
         if level in ("alert","delays"):        return _ic(self.coordinator, "mdi:train-alert")
