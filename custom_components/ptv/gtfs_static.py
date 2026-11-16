@@ -279,6 +279,7 @@ def _load_scheduled_departures(
             "direction_id": trip_dirs[tid],
             "trip_id": tid,
             "stop_id": row["stop_id"],
+            "stop_sequence": int(row.get("stop_sequence") or 0),
             "dep_str": dep_str,
         })
     deps.sort(key=lambda x: x["dep_seconds"])

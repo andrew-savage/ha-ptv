@@ -454,9 +454,12 @@ class PTVDataCoordinator(DataUpdateCoordinator):
                 return platform_dirs[stu.stop_id]
         return None
 
-    def _station_hits(self, stus, direction_id, is_express, now_utc):
+    def _station_hits(self, stus, direction_id, is_express, now_utc,
+                      trip_id: str = "", scheduled: dict | None = None):
         """First future stop at each configured station for one trip.
 
+        scheduled is {station_key: {trip_id: timetabled departure}}, used to
+        fill stations the trip's update leaves out (see _estimated_hit).
         Returns {station_key: hit or None}.
         """
         hits: dict[str, dict | None] = {
@@ -484,7 +487,35 @@ class PTVDataCoordinator(DataUpdateCoordinator):
                     stop_ids = info.get("outbound_stop_ids", info.get("stop_ids", []))
                 if stu.stop_id in stop_ids:
                     hits[key] = {"actual": dep_time, "delay_sec": delay, "is_express": is_express}
+        for key, hit in hits.items():
+            if hit is None and scheduled:
+                dep = scheduled.get(key, {}).get(trip_id)
+                if dep and dep["direction_id"] == direction_id:
+                    hits[key] = self._estimated_hit(stus, dep, is_express, now_utc)
         return hits
+
+    def _estimated_hit(self, stus, dep, is_express, now_utc) -> dict | None:
+        """Realtime departure at a stop the trip update leaves out.
+
+        PTV's trip updates sometimes skip intermediate stops (stop_sequence
+        gaps), so a running train would drop back to the timetable at that
+        station. Per GTFS-realtime, a stop with no update takes the delay of
+        the nearest earlier stop that has one. Only fill a stop that has
+        updates on both sides, so a train that no longer calls there isn't
+        invented.
+        """
+        seq = dep.get("stop_sequence") or 0
+        if not seq:
+            return None
+        before = [s for s in stus if s.stop_sequence and s.stop_sequence < seq]
+        after = [s for s in stus if s.stop_sequence and s.stop_sequence > seq]
+        if not before or not after:
+            return None
+        delay = self._stu_delay(before[-1])
+        actual = self._secs_to_dt(dep["dep_seconds"] + delay).astimezone(timezone.utc)
+        if actual <= now_utc:
+            return None
+        return {"actual": actual, "delay_sec": delay, "is_express": is_express}
 
     def _parse_trip_updates(self, raw, route_map, results):
         feed = gtfs_realtime_pb2.FeedMessage()
@@ -506,6 +537,12 @@ class PTVDataCoordinator(DataUpdateCoordinator):
         through_trips = (self.gtfs_cache or {}).get("through_trips", {})
         trip_dirs = (self.gtfs_cache or {}).get("trip_directions", {})
         handover_stops = set(get_stop_ids(self.gtfs_cache or {}, "Town Hall"))
+        # station_key -> trip_id -> timetabled departure, to fill stations
+        # missing from a trip's update
+        scheduled = {
+            key: {d["trip_id"]: d for d in deps}
+            for key, deps in (self.gtfs_cache or {}).get("scheduled_by_station", {}).items()
+        }
         platform_dirs = self._platform_directions()
         unknown_direction = 0
 
@@ -557,7 +594,7 @@ class PTVDataCoordinator(DataUpdateCoordinator):
                 targets = ([(line, direction_id)] if line is not None else []) + \
                     [(l, 1 - direction_id) for l in continuing]
             for tline, tdir in targets:
-                hits = self._station_hits(stus, tdir, is_express, now_utc)
+                hits = self._station_hits(stus, tdir, is_express, now_utc, trip_id, scheduled)
                 for key, hit in hits.items():
                     if hit:
                         rt_buckets[tline][key][tdir].append(hit)

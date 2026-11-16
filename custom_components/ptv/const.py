@@ -22,7 +22,9 @@ GTFS_CACHE_TTL_DAYS = 3
 # Bump when cached content changes meaning, so old caches are rebuilt.
 # 2: Metro Tunnel through-running departures.
 # 3: trip_directions, as realtime trip updates carry no direction_id.
-GTFS_CACHE_SCHEMA = 3
+# 4: stop_sequence on scheduled departures, to fill stops missing from
+#    realtime trip updates.
+GTFS_CACHE_SCHEMA = 4
 GTFS_DOWNLOAD_TIMEOUT = 420
 GTFS_METRO_INNER_ZIP = "2/google_transit.zip"
 GTFS_TRAM_INNER_ZIP = "3/google_transit.zip"
