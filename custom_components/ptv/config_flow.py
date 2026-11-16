@@ -67,7 +67,8 @@ def _validate_api_key(api_key: str) -> str | None:
 
 
 class PTVTrainDelaysConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    VERSION = 1
+    # 2: entity unique IDs are prefixed with the entry ID (async_migrate_entry).
+    VERSION = 2
 
     @staticmethod
     @callback

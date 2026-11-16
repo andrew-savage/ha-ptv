@@ -69,6 +69,16 @@ def _ld(coordinator, line):
 def _sd(coordinator, line, station_key):
     return _ld(coordinator, line).get("stations", {}).get(station_key, {})
 
+def _uid(coordinator, key: str) -> str:
+    """Unique ID scoped to the config entry.
+
+    Line entities were keyed on the line alone, so a second entry for the
+    same line had all of them rejected as duplicates. async_migrate_entry
+    adds the prefix to existing entities.
+    """
+    return f"{coordinator.entry_id}_{key}"
+
+
 def _device(line, tram: bool = False):
     return {
         "identifiers": {(DOMAIN, f"ptv_{line.lower().replace(' ','_')}")},
@@ -157,7 +167,7 @@ class PTVMaxDelaySensor(CoordinatorEntity, SensorEntity):
         super().__init__(coordinator)
         self._line = line
         slug = line.lower().replace(" ","_")
-        self._attr_unique_id = f"ptv_{slug}_max_delay"
+        self._attr_unique_id = _uid(coordinator, f"ptv_{slug}_max_delay")
         self._attr_name = f"PTV {_line_label(coordinator, line)}Max Delay"
 
     @property
@@ -180,7 +190,7 @@ class PTVStatusSensor(CoordinatorEntity, SensorEntity):
         super().__init__(coordinator)
         self._line = line
         slug = line.lower().replace(" ","_")
-        self._attr_unique_id = f"ptv_{slug}_status"
+        self._attr_unique_id = _uid(coordinator, f"ptv_{slug}_status")
         self._attr_name = f"PTV {_line_label(coordinator, line)}Status"
 
     @property
@@ -223,7 +233,7 @@ class PTVProblemLevelSensor(CoordinatorEntity, SensorEntity):
         super().__init__(coordinator)
         self._line = line
         slug = line.lower().replace(" ","_")
-        self._attr_unique_id = f"ptv_{slug}_problem_level"
+        self._attr_unique_id = _uid(coordinator, f"ptv_{slug}_problem_level")
         self._attr_name = f"PTV {_line_label(coordinator, line)}Problem Level"
 
     @property
@@ -249,7 +259,7 @@ class PTVProblemSummarySensor(CoordinatorEntity, SensorEntity):
         super().__init__(coordinator)
         self._line = line
         slug = line.lower().replace(" ","_")
-        self._attr_unique_id = f"ptv_{slug}_problem_summary"
+        self._attr_unique_id = _uid(coordinator, f"ptv_{slug}_problem_summary")
         self._attr_name = f"PTV {_line_label(coordinator, line)}Problem Summary"
 
     @property
@@ -284,7 +294,7 @@ class PTVAlertCountSensor(CoordinatorEntity, SensorEntity):
         super().__init__(coordinator)
         self._line = line
         slug = line.lower().replace(" ","_")
-        self._attr_unique_id = f"ptv_{slug}_alert_count"
+        self._attr_unique_id = _uid(coordinator, f"ptv_{slug}_alert_count")
         self._attr_name = f"PTV {_line_label(coordinator, line)}Active Alerts"
 
     @property
@@ -302,7 +312,7 @@ class PTVAlertTextSensor(CoordinatorEntity, SensorEntity):
         super().__init__(coordinator)
         self._line = line
         slug = line.lower().replace(" ","_")
-        self._attr_unique_id = f"ptv_{slug}_alert_text"
+        self._attr_unique_id = _uid(coordinator, f"ptv_{slug}_alert_text")
         self._attr_name = f"PTV {_line_label(coordinator, line)}Alert"
 
     @property
@@ -333,7 +343,7 @@ class PTVTrainCountSensor(CoordinatorEntity, SensorEntity):
         super().__init__(coordinator)
         self._line = line
         slug = line.lower().replace(" ","_")
-        self._attr_unique_id = f"ptv_{slug}_train_count"
+        self._attr_unique_id = _uid(coordinator, f"ptv_{slug}_train_count")
         self._attr_name = (f"PTV {_line_label(coordinator, line)}"
                            f"Active {'Trams' if _is_tram(coordinator) else 'Trains'}")
 
@@ -348,7 +358,7 @@ class PTVOccupancySensor(CoordinatorEntity, SensorEntity):
         super().__init__(coordinator)
         self._line = line
         slug = line.lower().replace(" ","_")
-        self._attr_unique_id = f"ptv_{slug}_occupancy"
+        self._attr_unique_id = _uid(coordinator, f"ptv_{slug}_occupancy")
         self._attr_name = f"PTV {_line_label(coordinator, line)}Occupancy"
 
     @property
@@ -388,7 +398,7 @@ class PTVUpcomingTrainSensor(CoordinatorEntity, SensorEntity):
         slug_st = _slug(station, _is_tram(coordinator))
         dir_label = _direction_label(coordinator, line, direction)
 
-        self._attr_unique_id = f"ptv_{slug_line}_{slug_st}_{direction}_{index}"
+        self._attr_unique_id = _uid(coordinator, f"ptv_{slug_line}_{slug_st}_{direction}_{index}")
         self._attr_name = f"PTV {_line_label(coordinator, line)}{station} {dir_label} {index}"
 
     @property
