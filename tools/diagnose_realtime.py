@@ -31,6 +31,15 @@ print(f"\nFeed timestamp: {datetime.fromtimestamp(feed.header.timestamp, tz=time
 print(f"Current time:  {now}")
 print(f"Total entities: {len(feed.entity)}\n")
 
+# The integration can't trust trip.direction_id unless the feed sets it:
+# protobuf reads an unset field as 0, which means outbound.
+all_trips = [e.trip_update.trip for e in feed.entity if e.HasField("trip_update")]
+with_dir = sum(1 for t in all_trips if t.HasField("direction_id"))
+print(f"Trips with direction_id set: {with_dir}/{len(all_trips)}")
+if all_trips and not with_dir:
+    print("  >> direction_id is never set; directions must come from the timetable.")
+print()
+
 hbe_trips = [e for e in feed.entity
              if e.HasField("trip_update")
              and e.trip_update.trip.route_id == HBE_ROUTE]
