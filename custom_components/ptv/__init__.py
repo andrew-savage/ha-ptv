@@ -505,6 +505,7 @@ class PTVDataCoordinator(DataUpdateCoordinator):
         # direction flipped — but not its delay or cancellation stats.
         through_trips = (self.gtfs_cache or {}).get("through_trips", {})
         trip_dirs = (self.gtfs_cache or {}).get("trip_directions", {})
+        handover_stops = set(get_stop_ids(self.gtfs_cache or {}, "Town Hall"))
         platform_dirs = self._platform_directions()
         unknown_direction = 0
 
@@ -538,8 +539,12 @@ class PTVDataCoordinator(DataUpdateCoordinator):
 
             # A citybound tunnel trip ends at the Town Hall handover, where the
             # train continues as another trip; that final stop is an arrival.
+            # Updates often stop short of it (at State Library, or further out
+            # before the train has full predictions), so only drop a last
+            # stop that really is Town Hall.
             stus = list(tu.stop_time_update)
-            if direction_id == 1 and stus and any(route_id.startswith(r) for r in TUNNEL_SIDES):
+            if (direction_id == 1 and stus and stus[-1].stop_id in handover_stops
+                    and any(route_id.startswith(r) for r in TUNNEL_SIDES)):
                 stus = stus[:-1]
             trip_max_delay = max((self._stu_delay(stu) for stu in stus), default=0)
 
