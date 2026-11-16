@@ -12,10 +12,20 @@ API_VEHICLE_POSITIONS_PATH = "/vehicle-positions"
 API_HEADER_KEY = "KeyID"
 
 # GTFS Static
+# PTV republishes the schedule under a new resource id from time to time, which
+# breaks any hardcoded download URL. The current one is looked up from the
+# dataset's CKAN record; GTFS_STATIC_URL is only used if that lookup fails.
+GTFS_DATASET_ID = "3f4e292e-7f8a-4ffe-831f-1953be0fe448"
+GTFS_PACKAGE_API_URL = (
+    "https://opendata.transport.vic.gov.au/api/3/action/package_show"
+    f"?id={GTFS_DATASET_ID}"
+)
+GTFS_RESOURCE_NAME = "GTFS Schedule"
+GTFS_LOOKUP_TIMEOUT = 30
 GTFS_STATIC_URL = (
     "https://opendata.transport.vic.gov.au/dataset/"
-    "3f4e292e-7f8a-4ffe-831f-1953be0fe448/resource/"
-    "fb152201-859f-4882-9206-b768060b50ad/download/gtfs.zip"
+    f"{GTFS_DATASET_ID}/resource/"
+    "8af7737c-5c9e-4022-aa98-911aa04370a7/download/gtfs.zip"
 )
 GTFS_CACHE_FILE = "ptv_gtfs_cache.json"
 GTFS_CACHE_TTL_DAYS = 3

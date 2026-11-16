@@ -17,7 +17,10 @@ from .const import (
     GTFS_CACHE_SCHEMA,
     GTFS_CACHE_TTL_DAYS,
     GTFS_DOWNLOAD_TIMEOUT,
+    GTFS_LOOKUP_TIMEOUT,
     GTFS_METRO_INNER_ZIP,
+    GTFS_PACKAGE_API_URL,
+    GTFS_RESOURCE_NAME,
     GTFS_STATIC_URL,
     METRO_LINES,
     MODE_TRAIN,
@@ -33,6 +36,46 @@ _METRO_CODES = {
     "ALM","BEG","CBE","CGB","FKN","GWY","HBE",
     "LIL","MDD","PKM","SHM","STY","SUY","UFD","WER","WIL",
 }
+
+_HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; HomeAssistant/PTV)"}
+
+
+def resolve_gtfs_static_url() -> str:
+    """Return the current download URL of the GTFS Schedule zip.
+
+    PTV republishes the schedule under a new CKAN resource id (twice in
+    November 2026 alone), and the old URL then 404s. The dataset id is
+    stable, so ask CKAN for its current resources. Falls back to the
+    hardcoded GTFS_STATIC_URL if the lookup fails.
+    """
+    try:
+        resp = requests.get(
+            GTFS_PACKAGE_API_URL, timeout=GTFS_LOOKUP_TIMEOUT, headers=_HEADERS)
+        resp.raise_for_status()
+        resources = resp.json()["result"]["resources"]
+        zips = [
+            r for r in resources
+            if (r.get("format") or "").lower() == "zip" and r.get("url")
+        ]
+        named = [
+            r for r in zips
+            if (r.get("name") or "").strip().lower() == GTFS_RESOURCE_NAME.lower()
+        ]
+        chosen = (named or zips or [None])[0]
+        if chosen is None:
+            raise ValueError("no ZIP resource in the dataset")
+        if not named:
+            _LOGGER.warning(
+                "No resource named '%s' in the GTFS dataset; using '%s'",
+                GTFS_RESOURCE_NAME, chosen.get("name"),
+            )
+        return chosen["url"]
+    except Exception as err:
+        _LOGGER.warning(
+            "Could not look up the GTFS Schedule URL (%s); using built-in %s",
+            err, GTFS_STATIC_URL,
+        )
+        return GTFS_STATIC_URL
 
 
 def _open_mode_zip(outer: zipfile.ZipFile, mode: str = MODE_TRAIN) -> zipfile.ZipFile:
@@ -289,14 +332,15 @@ def download_and_cache_gtfs(
         except Exception as err:
             _LOGGER.warning("Could not read GTFS cache: %s", err)
 
-    _LOGGER.info("Downloading GTFS static schedule...")
     try:
+        url = resolve_gtfs_static_url()
+        _LOGGER.info("Downloading GTFS static schedule from %s", url)
         resp = requests.get(
-            GTFS_STATIC_URL,
-            # ~280 MB; 180s needs a sustained 12 Mbit/s, which times out on
+            url,
+            # ~300 MB; 180s needs a sustained 13 Mbit/s, which times out on
             # slower connections and leaves setup with no station list.
             timeout=GTFS_DOWNLOAD_TIMEOUT,
-            headers={"User-Agent": "Mozilla/5.0 (compatible; HomeAssistant/PTV)"},
+            headers=_HEADERS,
         )
         resp.raise_for_status()
     except Exception as err:

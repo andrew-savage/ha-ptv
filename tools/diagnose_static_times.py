@@ -11,11 +11,16 @@ try:
 except ImportError:
     print("pip install requests"); sys.exit(1)
 
-GTFS_STATIC_URL = (
-    "https://opendata.transport.vic.gov.au/dataset/"
-    "3f4e292e-7f8a-4ffe-831f-1953be0fe448/resource/"
-    "fb152201-859f-4882-9206-b768060b50ad/download/gtfs.zip"
+# The resource id changes whenever PTV republishes, so look up the current one.
+_PACKAGE_API = (
+    "https://opendata.transport.vic.gov.au/api/3/action/package_show"
+    "?id=3f4e292e-7f8a-4ffe-831f-1953be0fe448"
 )
+GTFS_STATIC_URL = next(
+    r["url"] for r in requests.get(_PACKAGE_API, timeout=30).json()["result"]["resources"]
+    if (r.get("format") or "").lower() == "zip"
+)
+print("GTFS Schedule:", GTFS_STATIC_URL)
 IVANHOE_IDS = {"13754", "13755"}
 HBE_ROUTE = "aus:vic:vic-02-HBE:"
 
