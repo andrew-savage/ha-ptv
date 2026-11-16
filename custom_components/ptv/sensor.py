@@ -132,6 +132,26 @@ def _direction_label(coordinator, line, direction: str) -> str:
     )
 
 
+def _towards(coordinator, line, direction: str) -> str:
+    """The "direction" attribute of a departure sensor.
+
+    Every metro line is named after its outer terminus, so outbound trains
+    read "Towards Sunbury". Trams use the route's destination for that
+    direction from the timetable headsigns, e.g. "Towards St Kilda Beach".
+    """
+    citybound = direction == DIR_CITYBOUND
+    if not _is_tram(coordinator):
+        return "Towards City" if citybound else f"Towards {line}"
+    label = get_direction_label(
+        getattr(coordinator, "gtfs_cache", {}) or {},
+        routes_for_mode(coordinator.mode).get(line, ""),
+        1 if citybound else 0,
+    )
+    if label:
+        return f"Towards {label}"
+    return "Direction 1" if citybound else "Direction 0"
+
+
 def _fmt(iso: str | None, delay_sec: int, is_realtime: bool, is_express: bool = False) -> str:
     if not iso:
         return "Unknown"
@@ -416,7 +436,7 @@ class PTVUpcomingTrainSensor(CoordinatorEntity, SensorEntity):
         is_rt = entry.get("is_realtime", False)
         return {
             "station": self._station,
-            "direction": "Towards City" if self._direction == "citybound" else "Towards Hurstbridge/Eltham",
+            "direction": _towards(self.coordinator, self._line, self._direction),
             "index": self._index,
             "delay_seconds": delay_sec,
             "delay_minutes": round(delay_sec / 60, 1),
