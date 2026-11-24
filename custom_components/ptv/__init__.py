@@ -243,9 +243,19 @@ class PTVDataCoordinator(DataUpdateCoordinator):
         n = datetime.now().astimezone()
         return n.hour * 3600 + n.minute * 60 + n.second
 
-    def _secs_to_dt(self, secs: int) -> datetime:
-        now = datetime.now().astimezone()
-        midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    def _secs_to_dt(self, secs: int, service_date: str = "") -> datetime:
+        """Timetable seconds as a time on service_date (YYYYMMDD), or today.
+
+        Just after midnight the feed still carries yesterday's trips, whose
+        times run past 24:00:00.
+        """
+        midnight = datetime.now().astimezone().replace(
+            hour=0, minute=0, second=0, microsecond=0)
+        if service_date:
+            try:
+                midnight = datetime.strptime(service_date, "%Y%m%d").astimezone()
+            except ValueError:
+                pass
         return midnight + timedelta(seconds=secs)
 
     def _fetch_feed(self, path: str) -> bytes:
@@ -455,7 +465,8 @@ class PTVDataCoordinator(DataUpdateCoordinator):
         return None
 
     def _station_hits(self, stus, direction_id, is_express, now_utc,
-                      trip_id: str = "", scheduled: dict | None = None):
+                      trip_id: str = "", scheduled: dict | None = None,
+                      start_date: str = ""):
         """First future stop at each configured station for one trip.
 
         scheduled is {station_key: {trip_id: timetabled departure}}, used to
@@ -491,10 +502,12 @@ class PTVDataCoordinator(DataUpdateCoordinator):
             if hit is None and scheduled:
                 dep = scheduled.get(key, {}).get(trip_id)
                 if dep and dep["direction_id"] == direction_id:
-                    hits[key] = self._estimated_hit(stus, dep, is_express, now_utc)
+                    hits[key] = self._estimated_hit(
+                        stus, dep, is_express, now_utc, start_date)
         return hits
 
-    def _estimated_hit(self, stus, dep, is_express, now_utc) -> dict | None:
+    def _estimated_hit(self, stus, dep, is_express, now_utc,
+                       start_date: str = "") -> dict | None:
         """Realtime departure at a stop the trip update leaves out.
 
         PTV's trip updates sometimes skip intermediate stops (stop_sequence
@@ -507,12 +520,18 @@ class PTVDataCoordinator(DataUpdateCoordinator):
         seq = dep.get("stop_sequence") or 0
         if not seq:
             return None
-        before = [s for s in stus if s.stop_sequence and s.stop_sequence < seq]
-        after = [s for s in stus if s.stop_sequence and s.stop_sequence > seq]
+        # The update covers this stop after all: departed, skipped or no data.
+        if any(s.stop_sequence == seq or s.stop_id == dep["stop_id"] for s in stus):
+            return None
+        # 1=SKIPPED and 2=NO_DATA carry no delay to go by
+        timed = [s for s in stus if s.schedule_relationship not in (1, 2)]
+        before = [s for s in timed if s.stop_sequence and s.stop_sequence < seq]
+        after = [s for s in timed if s.stop_sequence and s.stop_sequence > seq]
         if not before or not after:
             return None
-        delay = self._stu_delay(before[-1])
-        actual = self._secs_to_dt(dep["dep_seconds"] + delay).astimezone(timezone.utc)
+        delay = self._stu_delay(max(before, key=lambda s: s.stop_sequence))
+        actual = self._secs_to_dt(
+            dep["dep_seconds"] + delay, start_date).astimezone(timezone.utc)
         if actual <= now_utc:
             return None
         return {"actual": actual, "delay_sec": delay, "is_express": is_express}
@@ -594,7 +613,8 @@ class PTVDataCoordinator(DataUpdateCoordinator):
                 targets = ([(line, direction_id)] if line is not None else []) + \
                     [(l, 1 - direction_id) for l in continuing]
             for tline, tdir in targets:
-                hits = self._station_hits(stus, tdir, is_express, now_utc, trip_id, scheduled)
+                hits = self._station_hits(
+                    stus, tdir, is_express, now_utc, trip_id, scheduled, tu.trip.start_date)
                 for key, hit in hits.items():
                     if hit:
                         rt_buckets[tline][key][tdir].append(hit)
