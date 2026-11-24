@@ -8,7 +8,8 @@ import requests
 from google.transit import gtfs_realtime_pb2
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
@@ -112,6 +113,35 @@ async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> Non
     await hass.config_entries.async_reload(entry.entry_id)
 
 
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Migrate an older config entry.
+
+    Version 1 -> 2: prefix entity unique IDs with the entry ID, so two entries
+    for the same line no longer collide. Entity IDs and history are kept.
+    """
+    if entry.version > 2:
+        # Downgraded from a newer version of the integration.
+        return False
+    if entry.version == 1:
+        prefix = f"{entry.entry_id}_"
+
+        @callback
+        def _add_prefix(reg_entry: er.RegistryEntry) -> dict | None:
+            if reg_entry.unique_id.startswith(prefix):
+                return None
+            return {"new_unique_id": prefix + reg_entry.unique_id}
+
+        await er.async_migrate_entries(hass, entry.entry_id, _add_prefix)
+        try:
+            hass.config_entries.async_update_entry(entry, version=2)
+        except TypeError:
+            # Home Assistant before 2024.1 has no version argument.
+            entry.version = 2
+            hass.config_entries.async_update_entry(entry)
+        _LOGGER.info("Migrated PTV entry '%s' to version 2", entry.title)
+    return True
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     api_key = entry.data[CONF_API_KEY]
     monitored_lines = entry.data[CONF_LINES]
@@ -171,6 +201,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         gtfs_cache=gtfs_cache,
         polling=polling,
         mode=mode,
+        entry_id=entry.entry_id,
     )
 
     await coordinator.async_config_entry_first_refresh()
@@ -191,8 +222,9 @@ class PTVDataCoordinator(DataUpdateCoordinator):
 
     def __init__(self, hass, api_key, monitored_lines, scan_interval,
                  alert_effects, stations_config, station_stop_ids, gtfs_cache,
-                 polling=None, mode=DEFAULT_MODE):
+                 polling=None, mode=DEFAULT_MODE, entry_id=""):
         self.api_key = api_key
+        self.entry_id = entry_id  # prefixes entity unique IDs
         self.mode = mode
         self.api_base = api_base_for_mode(mode)
         self._last_feeds: dict[str, tuple[bytes, datetime]] = {}

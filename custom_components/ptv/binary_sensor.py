@@ -7,7 +7,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .sensor import _device, _ic, _is_tram, _line_label
+from .sensor import _device, _ic, _is_tram, _line_label, _uid
 from .const import CONF_LINES, DOMAIN
 from . import PTVDataCoordinator
 
@@ -40,7 +40,7 @@ class PTVDelayBinarySensor(CoordinatorEntity, BinarySensorEntity):
         super().__init__(coordinator)
         self._line = line
         slug = line.lower().replace(" ","_")
-        self._attr_unique_id = f"ptv_{slug}_delays"
+        self._attr_unique_id = _uid(coordinator, f"ptv_{slug}_delays")
         self._attr_name = f"PTV {_line_label(coordinator, line)}Delays"
 
     @property
@@ -65,7 +65,7 @@ class PTVCancellationBinarySensor(CoordinatorEntity, BinarySensorEntity):
         super().__init__(coordinator)
         self._line = line
         slug = line.lower().replace(" ","_")
-        self._attr_unique_id = f"ptv_{slug}_cancellations"
+        self._attr_unique_id = _uid(coordinator, f"ptv_{slug}_cancellations")
         self._attr_name = f"PTV {_line_label(coordinator, line)}Cancellations"
 
     @property
@@ -83,7 +83,7 @@ class PTVAlertBinarySensor(CoordinatorEntity, BinarySensorEntity):
         super().__init__(coordinator)
         self._line = line
         slug = line.lower().replace(" ","_")
-        self._attr_unique_id = f"ptv_{slug}_service_alert"
+        self._attr_unique_id = _uid(coordinator, f"ptv_{slug}_service_alert")
         self._attr_name = f"PTV {_line_label(coordinator, line)}Service Alert"
 
     @property
@@ -107,7 +107,7 @@ class PTVProblemBinarySensor(CoordinatorEntity, BinarySensorEntity):
         super().__init__(coordinator)
         self._line = line
         slug = line.lower().replace(" ","_")
-        self._attr_unique_id = f"ptv_{slug}_any_problem"
+        self._attr_unique_id = _uid(coordinator, f"ptv_{slug}_any_problem")
         self._attr_name = f"PTV {_line_label(coordinator, line)}Any Problem"
 
     @property
