@@ -536,6 +536,29 @@ class PTVDataCoordinator(DataUpdateCoordinator):
             return None
         return {"actual": actual, "delay_sec": delay, "is_express": is_express}
 
+    @staticmethod
+    def _is_other_day(tu) -> bool:
+        """Whether the trip belongs to another service day than today's.
+
+        Trip IDs repeat daily, so yesterday's late trips must not be mistaken
+        for today's entries of the same ID in the timetable.
+        """
+        today = datetime.now().astimezone().strftime("%Y%m%d")
+        return bool(tu.trip.start_date) and tu.trip.start_date != today
+
+    def _no_longer_calls(self, stus, dep, now_utc) -> bool:
+        """Whether the trip has departed, passed or will skip a station."""
+        if dep is None:
+            return False
+        seq = dep.get("stop_sequence") or 0
+        for s in stus:
+            if s.stop_id == dep["stop_id"] or (seq and s.stop_sequence == seq):
+                when = s.departure.time or s.arrival.time
+                return s.schedule_relationship == 1 or bool(
+                    when and when <= now_utc.timestamp())
+        seqs = [s.stop_sequence for s in stus if s.stop_sequence]
+        return bool(seq and seqs) and min(seqs) > seq
+
     def _parse_trip_updates(self, raw, route_map, results):
         feed = gtfs_realtime_pb2.FeedMessage()
         feed.ParseFromString(raw)
@@ -564,6 +587,11 @@ class PTVDataCoordinator(DataUpdateCoordinator):
         }
         platform_dirs = self._platform_directions()
         unknown_direction = 0
+        # station_key -> trips the timetable fallback must not list: already
+        # shown live, cancelled, or past the station
+        self._handled_trips: dict[str, set[str]] = {
+            scfg[CONF_STATION_NAME].lower(): set() for scfg in self.stations_config
+        }
 
         for entity in feed.entity:
             if not entity.HasField("trip_update"):
@@ -591,6 +619,9 @@ class PTVDataCoordinator(DataUpdateCoordinator):
                 if line is not None:
                     results[line]["cancelled_trips"].append(trip_id)
                     results[line]["has_cancellations"] = True
+                if not self._is_other_day(tu):
+                    for handled in self._handled_trips.values():
+                        handled.add(trip_id)
                 continue
 
             # A citybound tunnel trip ends at the Town Hall handover, where the
@@ -618,6 +649,11 @@ class PTVDataCoordinator(DataUpdateCoordinator):
                 for key, hit in hits.items():
                     if hit:
                         rt_buckets[tline][key][tdir].append(hit)
+                    elif not self._no_longer_calls(
+                            stus, scheduled.get(key, {}).get(trip_id), now_utc):
+                        continue
+                    if not self._is_other_day(tu):
+                        self._handled_trips[key].add(trip_id)
 
             if line is None:
                 continue
@@ -679,20 +715,12 @@ class PTVDataCoordinator(DataUpdateCoordinator):
                     if needed <= 0:
                         continue
 
-                    # Find the cutoff: after the last realtime entry, or now
-                    if existing:
-                        last_dt = datetime.fromisoformat(existing[-1]["dt_iso"])
-                        last_sec = (
-                            last_dt.astimezone().hour * 3600
-                            + last_dt.astimezone().minute * 60
-                            + last_dt.astimezone().second
-                        )
-                        after_sec = last_sec
-                    else:
-                        after_sec = now_sec
-
+                    # Trips already accounted for by the live feed are left
+                    # out by ID; cutting off at the last live time instead
+                    # would hide any earlier service the feed has no time for.
                     scheduled = get_next_n_scheduled(
-                        self.gtfs_cache, key, dir_id, after_sec, needed
+                        self.gtfs_cache, key, dir_id, now_sec, needed,
+                        self._handled_trips.get(key, set()),
                     )
                     for sched in scheduled:
                         dt = self._secs_to_dt(sched["dep_seconds"])
@@ -702,6 +730,7 @@ class PTVDataCoordinator(DataUpdateCoordinator):
                             "is_realtime": False,
                             "is_express": False,  # not derivable from static schedule
                         })
+                    existing.sort(key=lambda d: datetime.fromisoformat(d["dt_iso"]))
 
     # ------------------------------------------------------------------ #
     # Service alerts

@@ -475,13 +475,15 @@ def get_next_n_scheduled(
     direction_id: int,
     after_seconds: int,
     count: int = 4,
+    exclude_trips: set[str] = frozenset(),
 ) -> list[dict]:
     """Return up to `count` scheduled departures in given direction after after_seconds."""
     key = station_name.lower()
     all_deps = cache.get("scheduled_by_station", {}).get(key, [])
     results = []
     for dep in all_deps:
-        if dep["direction_id"] == direction_id and dep["dep_seconds"] > after_seconds:
+        if (dep["direction_id"] == direction_id and dep["dep_seconds"] > after_seconds
+                and dep["trip_id"] not in exclude_trips):
             results.append(dep)
             if len(results) >= count:
                 break
