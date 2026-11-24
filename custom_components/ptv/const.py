@@ -34,7 +34,8 @@ GTFS_CACHE_TTL_DAYS = 3
 # 3: trip_directions, as realtime trip updates carry no direction_id.
 # 4: stop_sequence on scheduled departures, to fill stops missing from
 #    realtime trip updates.
-GTFS_CACHE_SCHEMA = 4
+# 5: route_stops, to offer only the selected lines' stops in setup.
+GTFS_CACHE_SCHEMA = 5
 GTFS_DOWNLOAD_TIMEOUT = 420
 GTFS_METRO_INNER_ZIP = "2/google_transit.zip"
 GTFS_TRAM_INNER_ZIP = "3/google_transit.zip"
@@ -132,6 +133,10 @@ TUNNEL_SIDES = {
     "aus:vic:vic-02-PKM:": "east",
     "aus:vic:vic-02-CBE:": "east",
 }
+
+# Stations a rider of any tunnel line can use, though the line's own trips only
+# reach one side of Town Hall (see above). Platform stops carry these names.
+TUNNEL_STATIONS = {"arden", "parkville", "state library", "town hall", "anzac"}
 
 
 def through_running_routes(route_ids) -> set[str]:

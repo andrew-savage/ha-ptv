@@ -37,7 +37,7 @@ from .const import (
     DIR_CITYBOUND, DIR_OUTBOUND, DIR_BOTH,
     DOMAIN, METRO_LINES,
 )
-from .gtfs_static import download_and_cache_gtfs, get_all_station_names, get_direction_label
+from .gtfs_static import download_and_cache_gtfs, get_direction_label, get_station_names
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -226,7 +226,7 @@ class PTVTrainDelaysConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     route_ids,
                     self._mode,
                 )
-                self._station_names = get_all_station_names(self._gtfs_cache)
+                self._station_names = get_station_names(self._gtfs_cache, route_ids)
             except Exception as err:
                 _LOGGER.warning("Could not load station names: %s", err)
                 self._station_names = []
@@ -241,7 +241,18 @@ class PTVTrainDelaysConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             station = user_input.get(CONF_STATION_NAME, "").strip()
-            if station and station not in ("(Done — no more stations)", ""):
+            is_done = station in ("(Done — no more stations)", "")
+            # Typed names are accepted as they are only when there is no list
+            # to check against.
+            by_key = {n.lower(): n for n in self._station_names}
+            if not is_done and by_key:
+                if station.lower() in by_key:
+                    station = by_key[station.lower()]
+                else:
+                    errors[CONF_STATION_NAME] = "station_not_on_line"
+
+        if user_input is not None and not errors.get(CONF_STATION_NAME):
+            if not is_done:
                 self._stations.append({
                     CONF_STATION_NAME: station,
                     CONF_STATION_DIRECTIONS: user_input.get(CONF_STATION_DIRECTIONS, DIR_BOTH),
@@ -294,7 +305,7 @@ class PTVTrainDelaysConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 "hint": (
                     "Tram stops are listed with their stop number, e.g. \"#115\"."
                     if self._mode == MODE_TRAM else
-                    "Type to search all Metro stations."
+                    "Type to search the stations on the selected lines."
                 ),
             },
         )

@@ -38,6 +38,7 @@
       "invalid_auth": "API key rejected.",
       "no_lines_selected": "Select at least one line or route.",
       "no_alerts_selected": "Select at least one alert type.",
+      "station_not_on_line": "That isn't a station or stop on the selected lines or routes. Choose one from the list.",
       "station_list_unavailable": "Could not download the station/stop list from Transport Victoria (the schedule file is large and the download may have timed out). Type the name in manually, or go back and retry.",
       "unknown": "Unexpected error."
     },

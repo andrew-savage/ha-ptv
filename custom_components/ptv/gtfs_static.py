@@ -26,6 +26,7 @@ from .const import (
     MODE_TRAIN,
     MODE_TRAM,
     TUNNEL_SIDES,
+    TUNNEL_STATIONS,
     mode_info,
     through_running_routes,
 )
@@ -223,6 +224,33 @@ def _through_trips(z: zipfile.ZipFile, route_ids: set[str], active_sids: set[str
     return {tid: own_blocks[key] for tid, key in candidates if key in own_blocks}
 
 
+def _route_stops(
+    z: zipfile.ZipFile, route_ids: set[str], stops: dict[str, dict]
+) -> list[str]:
+    """Keys of the stops served by the given routes, on any day.
+
+    Not limited to today's services, so a stop only served on other days can
+    still be chosen.
+    """
+    prefixes = tuple(route_ids)
+    with z.open("trips.txt") as f:
+        trips = {
+            row["trip_id"]
+            for row in csv.DictReader(io.TextIOWrapper(f, encoding="utf-8-sig"))
+            if row.get("route_id", "").startswith(prefixes)
+        }
+    # Plain reader: this is every row of the network's largest file.
+    with z.open("stop_times.txt") as f:
+        reader = csv.reader(io.TextIOWrapper(f, encoding="utf-8-sig"))
+        header = next(reader)
+        trip_col, stop_col = header.index("trip_id"), header.index("stop_id")
+        served = {row[stop_col] for row in reader if row and row[trip_col] in trips}
+    keys = {k for k, v in stops.items() if not served.isdisjoint(v["stop_ids"])}
+    if any(r in TUNNEL_SIDES for r in route_ids):
+        keys |= TUNNEL_STATIONS & stops.keys()
+    return sorted(keys)
+
+
 def _trip_directions(
     z: zipfile.ZipFile,
     route_ids: set[str],
@@ -389,6 +417,7 @@ def download_and_cache_gtfs(
     outer = zipfile.ZipFile(io.BytesIO(resp.content))
     metro_z = _open_mode_zip(outer, mode)
     stops = _load_stops(metro_z, mode)
+    route_stops = _route_stops(metro_z, route_ids, stops)
     direction_labels = _load_direction_labels(metro_z, route_ids)
 
     now = datetime.now().astimezone()
@@ -428,6 +457,7 @@ def download_and_cache_gtfs(
         "mode": mode,
         "route_ids": sorted(route_ids),
         "stops": stops,
+        "route_stops": route_stops,
         "direction_labels": direction_labels,
         "through_trips": through_trips,
         "trip_directions": trip_directions,
@@ -455,8 +485,14 @@ def get_stop_ids(cache: dict, station_name: str) -> list[str]:
     return []
 
 
-def get_all_station_names(cache: dict) -> list[str]:
-    return sorted(v["stop_name"] for v in cache.get("stops", {}).values())
+def get_station_names(cache: dict, route_ids: set[str]) -> list[str]:
+    """Names of the stops on the given routes.
+
+    Falls back to every stop if the cache is an old copy for other routes.
+    """
+    stops = cache.get("stops", {})
+    keys = cache.get("route_stops") if cache.get("route_ids") == sorted(route_ids) else None
+    return sorted(stops[k]["stop_name"] for k in (keys or stops))
 
 
 def get_direction_label(cache: dict, route_id: str, direction_id, fallback: str = "") -> str:
