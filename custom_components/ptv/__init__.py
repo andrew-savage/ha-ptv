@@ -482,9 +482,7 @@ class PTVDataCoordinator(DataUpdateCoordinator):
             if stu.HasField("departure"):
                 if stu.departure.time:
                     dep_time = datetime.fromtimestamp(stu.departure.time, tz=timezone.utc)
-            elif stu.HasField("arrival"):
-                if stu.arrival.time:
-                    dep_time = datetime.fromtimestamp(stu.arrival.time, tz=timezone.utc)
+            # Arrival only is where the trip terminates, so nothing departs.
             if not dep_time or dep_time <= now_utc:
                 continue
             for key in hits:
