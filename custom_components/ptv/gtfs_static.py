@@ -362,27 +362,58 @@ def _through_trips(z: zipfile.ZipFile, route_ids: set[str], active_sids: set[str
     return {tid: own_blocks[key] for tid, key in candidates if key in own_blocks}
 
 
-def _route_stops(
-    z: zipfile.ZipFile, route_ids: set[str], stops: dict[str, dict]
-) -> list[str]:
+def _filtered_lines(lines, trip_ids: set[str]):
+    """The header, then only the lines of the given trips.
+
+    stop_times.txt is millions of rows, nearly all of them other routes'.
+    Dropping those before the csv module sees them is several times faster.
+    """
+    header = next(lines)
+    yield header
+    if header.split(",", 1)[0].strip().strip('"') != "trip_id":
+        yield from lines
+        return
+    for line in lines:
+        if line.split(",", 1)[0].strip('"') in trip_ids:
+            yield line
+
+
+def _scan_stop_times(
+    z: zipfile.ZipFile,
+    route_trips: set[str],
+    dep_trips: dict[str, int],
+    stop_ids: set[str],
+    tunnel_trips: set[str],
+) -> tuple[set[str], list[dict], dict[str, int]]:
+    """Everything needed from stop_times.txt, in one pass.
+
+    Returns the stop IDs route_trips serve, the rows of dep_trips at stop_ids,
+    and the last stop_sequence of each tunnel trip.
+    """
+    served: set[str] = set()
+    rows: list[dict] = []
+    last_seq: dict[str, int] = {}
+    with z.open("stop_times.txt") as f:
+        lines = io.TextIOWrapper(f, encoding="utf-8-sig")
+        for row in csv.DictReader(_filtered_lines(lines, route_trips | dep_trips.keys())):
+            tid = row.get("trip_id")
+            if tid in route_trips:
+                served.add(row.get("stop_id"))
+            if tid in tunnel_trips:
+                seq = int(row.get("stop_sequence") or 0)
+                if seq > last_seq.get(tid, -1):
+                    last_seq[tid] = seq
+            if row.get("stop_id") in stop_ids and tid in dep_trips:
+                rows.append(row)
+    return served, rows, last_seq
+
+
+def _route_stops(route_ids: set[str], stops: dict[str, dict], served: set[str]) -> list[str]:
     """Keys of the stops served by the given routes, on any day.
 
     Not limited to today's services, so a stop only served on other days can
     still be chosen.
     """
-    prefixes = tuple(route_ids)
-    with z.open("trips.txt") as f:
-        trips = {
-            row["trip_id"]
-            for row in csv.DictReader(io.TextIOWrapper(f, encoding="utf-8-sig"))
-            if row.get("route_id", "").startswith(prefixes)
-        }
-    # Plain reader: this is every row of the network's largest file.
-    with z.open("stop_times.txt") as f:
-        reader = csv.reader(io.TextIOWrapper(f, encoding="utf-8-sig"))
-        header = next(reader)
-        trip_col, stop_col = header.index("trip_id"), header.index("stop_id")
-        served = {row[stop_col] for row in reader if row and row[trip_col] in trips}
     keys = {k for k, v in stops.items() if not served.isdisjoint(v["stop_ids"])}
     if any(r in TUNNEL_SIDES for r in route_ids):
         keys |= TUNNEL_STATIONS & stops.keys()
@@ -418,35 +449,35 @@ def _trip_directions(
     return dirs
 
 
-def _load_scheduled_departures(
+def _departure_trips(
     metro_z: zipfile.ZipFile,
-    stop_ids: set[str],
     route_ids: set[str],
-    today_str: str,
-    dow: str,
-    through_trips: dict[str, str] | None = None,
-) -> list[dict]:
-    """Return all departures at stop_ids today, sorted by time.
+    active_sids: set[str],
+    through_trips: dict[str, str],
+) -> tuple[set[str], dict[str, int], set[str]]:
+    """Trips of the selected routes.
 
-    through_trips (from _through_trips) adds the tunnel continuations of the
-    selected lines' trains, with direction flipped to read relative to them.
+    Returns all their trip IDs on any day, the direction of each trip running
+    today, and which of those are tunnel trips. through_trips (from
+    _through_trips) adds the tunnel continuations of the selected lines'
+    trains, with direction flipped to read relative to them.
     """
-    active_sids = _active_service_ids(metro_z, today_str, dow)
-
-    # Trip -> direction
     # Prefix match so route ID variants (e.g. "aus:vic:vic-02-HBE:E" express)
     # are included; base IDs end with ":" so "-R:" replacement buses never match.
     route_prefixes = tuple(route_ids)
-    through_trips = through_trips or {}
+    route_trips: set[str] = set()
     trip_dirs: dict[str, int] = {}
     tunnel_trips: set[str] = set()
     with metro_z.open("trips.txt") as f:
         for row in csv.DictReader(io.TextIOWrapper(f, encoding="utf-8-sig")):
+            rid = row.get("route_id", "")
+            own = rid.startswith(route_prefixes)
+            if own:
+                route_trips.add(row["trip_id"])
             if row.get("service_id") not in active_sids:
                 continue
-            rid = row.get("route_id", "")
             direction = int(row.get("direction_id", 0))
-            if rid.startswith(route_prefixes):
+            if own:
                 trip_dirs[row["trip_id"]] = direction
             elif row["trip_id"] in through_trips:
                 trip_dirs[row["trip_id"]] = 1 - direction
@@ -454,24 +485,26 @@ def _load_scheduled_departures(
                 continue
             if any(rid.startswith(t) for t in TUNNEL_SIDES):
                 tunnel_trips.add(row["trip_id"])
+    return route_trips, trip_dirs, tunnel_trips
 
-    # Departures at our stops. A tunnel trip's last stop is the Town Hall
-    # handover, where the train carries on as the next trip — that row is an
-    # arrival, and keeping it would list every train there twice.
-    rows = []
-    last_seq: dict[str, int] = {}
-    with metro_z.open("stop_times.txt") as f:
-        for row in csv.DictReader(io.TextIOWrapper(f, encoding="utf-8-sig")):
-            tid = row.get("trip_id")
-            if tid in tunnel_trips:
-                seq = int(row.get("stop_sequence") or 0)
-                if seq > last_seq.get(tid, -1):
-                    last_seq[tid] = seq
-            if row.get("stop_id") in stop_ids and tid in trip_dirs:
-                rows.append(row)
 
+def _scheduled_departures(
+    rows: list[dict],
+    stop_ids: set[str],
+    trip_dirs: dict[str, int],
+    tunnel_trips: set[str],
+    last_seq: dict[str, int],
+) -> list[dict]:
+    """Departures at stop_ids, sorted by time.
+
+    A tunnel trip's last stop is the Town Hall handover, where the train
+    carries on as the next trip — that row is an arrival, and keeping it would
+    list every train there twice.
+    """
     deps = []
     for row in rows:
+        if row["stop_id"] not in stop_ids:
+            continue
         tid = row["trip_id"]
         if tid in tunnel_trips and int(row.get("stop_sequence") or 0) == last_seq.get(tid):
             continue
@@ -566,7 +599,6 @@ def _load_gtfs(
             return stale_cache
         raise
     stops = _load_stops(metro_z, mode)
-    route_stops = _route_stops(metro_z, route_ids, stops)
     direction_labels = _load_direction_labels(metro_z, route_ids)
 
     now = datetime.now().astimezone()
@@ -574,13 +606,14 @@ def _load_gtfs(
     yesterday = now - timedelta(days=1)
     # Yesterday's services too: trips that run past midnight (times beyond
     # 24:00:00) belong to the previous service day but are still in the feed.
-    active_sids = _active_service_ids(metro_z, today_str, dow) | _active_service_ids(
+    today_sids = _active_service_ids(metro_z, today_str, dow)
+    active_sids = today_sids | _active_service_ids(
         metro_z, yesterday.strftime("%Y%m%d"), yesterday.strftime("%A").lower())
     through_trips = _through_trips(metro_z, route_ids, active_sids)
     trip_directions = _trip_directions(metro_z, route_ids, through_trips, active_sids)
 
-    # Load scheduled departures for each requested station
-    scheduled_by_station: dict[str, list] = {}
+    # Resolve each requested station to its stops
+    station_stops: dict[str, set[str]] = {}
     for station_name in station_names:
         key = station_name.lower()
         entry = stops.get(key)
@@ -589,15 +622,20 @@ def _load_gtfs(
                 if key in k:
                     entry = v
                     break
-        if entry:
-            stop_ids = set(entry["stop_ids"])
-            deps = _load_scheduled_departures(
-                metro_z, stop_ids, route_ids, today_str, dow, through_trips)
-            scheduled_by_station[key] = deps
-            _LOGGER.info("Loaded %d departures for %s", len(deps), station_name)
-        else:
+        if not entry:
             _LOGGER.warning("Station '%s' not found in GTFS static data", station_name)
-            scheduled_by_station[key] = []
+        station_stops[key] = set(entry["stop_ids"]) if entry else set()
+
+    route_trips, trip_dirs, tunnel_trips = _departure_trips(
+        metro_z, route_ids, today_sids, through_trips)
+    served, rows, last_seq = _scan_stop_times(
+        metro_z, route_trips, trip_dirs,
+        set().union(*station_stops.values()), tunnel_trips)
+    route_stops = _route_stops(route_ids, stops, served)
+    scheduled_by_station = {
+        key: _scheduled_departures(rows, ids, trip_dirs, tunnel_trips, last_seq)
+        for key, ids in station_stops.items()
+    }
 
     cache = {
         "cached_at": datetime.now(timezone.utc).isoformat(),
