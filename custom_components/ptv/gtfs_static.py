@@ -5,6 +5,9 @@ import csv
 import io
 import json
 import logging
+import shutil
+import tempfile
+import threading
 import zipfile
 from collections import Counter
 from datetime import datetime, timedelta, timezone
@@ -17,10 +20,13 @@ from .const import (
     GTFS_CACHE_SCHEMA,
     GTFS_CACHE_TTL_DAYS,
     GTFS_DOWNLOAD_TIMEOUT,
+    GTFS_LEGACY_CACHE_FILES,
     GTFS_LOOKUP_TIMEOUT,
     GTFS_METRO_INNER_ZIP,
     GTFS_PACKAGE_API_URL,
+    GTFS_RANGE_BLOCK,
     GTFS_RESOURCE_NAME,
+    GTFS_SHARE_SECONDS,
     GTFS_STATIC_URL,
     METRO_LINES,
     MODE_TRAIN,
@@ -79,35 +85,167 @@ def resolve_gtfs_static_url() -> str:
         return GTFS_STATIC_URL
 
 
-def _open_mode_zip(outer: zipfile.ZipFile, mode: str = MODE_TRAIN) -> zipfile.ZipFile:
-    """Open the inner GTFS zip for a transport mode."""
+class _RangeFile(io.RawIOBase):
+    """Remote file read with HTTP range requests.
+
+    The schedule zip is ~300 MB but holds one inner zip per transport mode,
+    and ours is 25-40 MB of it. Seeking lets zipfile fetch just that.
+    """
+
+    def __init__(self, url: str) -> None:
+        self._url = url
+        self._session = requests.Session()
+        self._session.headers.update(_HEADERS)
+        self._pos = 0
+        self._size, self._etag = 0, None
+        try:
+            resp = self._get(0, 0)
+            self._size = int(resp.headers["Content-Range"].rsplit("/", 1)[1])
+            self._etag = resp.headers.get("ETag")
+        except Exception:
+            self._session.close()
+            raise
+
+    def _get(self, start: int, end: int) -> requests.Response:
+        # Streamed so that a server ignoring the range can't send it all
+        resp = self._session.get(
+            self._url, headers={"Range": f"bytes={start}-{end}"},
+            timeout=(10, 60), stream=True)
+        resp.raise_for_status()
+        if resp.status_code != 206:
+            resp.close()
+            raise OSError("server does not support range requests")
+        if self._etag and resp.headers.get("ETag") != self._etag:
+            resp.close()
+            raise OSError("schedule changed during download")
+        return resp
+
+    def readable(self) -> bool:
+        return True
+
+    def seekable(self) -> bool:
+        return True
+
+    def tell(self) -> int:
+        return self._pos
+
+    def seek(self, offset: int, whence: int = io.SEEK_SET) -> int:
+        base = {io.SEEK_SET: 0, io.SEEK_CUR: self._pos, io.SEEK_END: self._size}[whence]
+        self._pos = max(0, base + offset)
+        return self._pos
+
+    def readinto(self, buf) -> int:
+        want = min(len(buf), self._size - self._pos)
+        if want <= 0:
+            return 0
+        data = self._get(self._pos, self._pos + want - 1).content
+        if len(data) != want:
+            raise OSError("short range response")
+        buf[:want] = data
+        self._pos += want
+        return want
+
+    def close(self) -> None:
+        if not self.closed:
+            self._session.close()
+        super().close()
+
+
+def _extract_to_temp(outer: zipfile.ZipFile, name: str):
+    """Copy one inner zip to an unnamed temporary file."""
+    tmp = tempfile.TemporaryFile()
+    try:
+        with outer.open(name) as src:
+            shutil.copyfileobj(src, tmp, 1024 * 1024)
+        tmp.seek(0)
+    except BaseException:
+        tmp.close()
+        raise
+    return tmp
+
+
+def _extract_mode_zip(outer: zipfile.ZipFile, mode: str = MODE_TRAIN):
+    """Extract the inner GTFS zip for a transport mode to a temporary file."""
     info = mode_info(mode)
     known = info["gtfs_inner_zip"]
     # Route IDs are "aus:vic:vic-02-..." for train, "vic-03-" for tram
     marker = f"vic-{known.split('/')[0].zfill(2)}-"
 
     if known in outer.namelist():
-        try:
-            return zipfile.ZipFile(io.BytesIO(outer.read(known)))
-        except Exception as err:
-            _LOGGER.warning("Known %s zip path failed: %s, scanning...", mode, err)
+        return _extract_to_temp(outer, known)
     for entry in sorted(outer.namelist()):
         if not entry.endswith("google_transit.zip"):
             continue
+        tmp = None
         try:
-            inner_z = zipfile.ZipFile(io.BytesIO(outer.read(entry)))
-            if "routes.txt" not in inner_z.namelist():
-                continue
-            with inner_z.open("routes.txt") as f:
+            tmp = _extract_to_temp(outer, entry)
+            with zipfile.ZipFile(tmp) as inner_z, inner_z.open("routes.txt") as f:
                 content = f.read().decode("utf-8-sig")
-            if mode == MODE_TRAIN:
-                if len([c for c in _METRO_CODES if f"-{c}:" in content]) >= 3:
-                    return inner_z
-            elif marker in content:
-                return inner_z
-        except Exception:
-            pass
+        except (KeyError, zipfile.BadZipFile):
+            if tmp:
+                tmp.close()
+            continue
+        if (len([c for c in _METRO_CODES if f"-{c}:" in content]) >= 3
+                if mode == MODE_TRAIN else marker in content):
+            return tmp
+        tmp.close()
     raise RuntimeError(f"Could not locate {mode} data inside GTFS zip.")
+
+
+def _download_mode_zip(url: str, mode: str):
+    """Download a mode's inner zip, whole-file only if ranges don't work."""
+    try:
+        with io.BufferedReader(_RangeFile(url), GTFS_RANGE_BLOCK) as remote, \
+                zipfile.ZipFile(remote) as outer:
+            return _extract_mode_zip(outer, mode)
+    except Exception as err:
+        _LOGGER.info("Partial download failed (%s); downloading the whole schedule", err)
+    with tempfile.TemporaryFile() as full:
+        with requests.get(
+            url,
+            # ~300 MB; 180s needs a sustained 13 Mbit/s, which times out on
+            # slower connections and leaves setup with no station list.
+            timeout=(10, GTFS_DOWNLOAD_TIMEOUT),
+            headers=_HEADERS,
+            stream=True,
+        ) as resp:
+            resp.raise_for_status()
+            for chunk in resp.iter_content(1024 * 1024):
+                full.write(chunk)
+        full.seek(0)
+        with zipfile.ZipFile(full) as outer:
+            return _extract_mode_zip(outer, mode)
+
+
+# Entries load one at a time, so that several starting together (or refreshing
+# at midnight) share one download per mode and don't add up in memory.
+_load_lock = threading.Lock()
+_shared_zips: dict[str, dict] = {}  # mode -> {"file", "timer"}
+
+
+def _drop_shared_zip(mode: str, item: dict) -> None:
+    with _load_lock:
+        if _shared_zips.get(mode) is item:
+            del _shared_zips[mode]
+        item["file"].close()
+
+
+def _get_mode_zip(mode: str):
+    """The mode's zip, from a recent download if there is one.
+
+    Call with _load_lock held.
+    """
+    item = _shared_zips.get(mode)
+    if item is None:
+        url = resolve_gtfs_static_url()
+        _LOGGER.info("Downloading GTFS static schedule from %s", url)
+        item = {"file": _download_mode_zip(url, mode)}
+        timer = threading.Timer(GTFS_SHARE_SECONDS, _drop_shared_zip, (mode, item))
+        timer.daemon = True
+        _shared_zips[mode] = item
+        timer.start()
+    item["file"].seek(0)
+    return item["file"]
 
 
 def _clean_stop_name(name: str, mode: str) -> str:
@@ -357,22 +495,48 @@ def _load_scheduled_departures(
     return deps
 
 
+def gtfs_cache_path(config_dir: str, entry_id: str) -> Path:
+    return Path(config_dir) / GTFS_CACHE_FILE.format(entry_id=entry_id)
+
+
+def remove_gtfs_cache(config_dir: str, entry_id: str) -> None:
+    """Delete a removed entry's cached timetable."""
+    try:
+        gtfs_cache_path(config_dir, entry_id).unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as err:
+        _LOGGER.warning("Could not delete GTFS cache: %s", err)
+
+
 def download_and_cache_gtfs(
     config_dir: str,
     station_names: list[str],
     route_ids: set[str],
     mode: str = MODE_TRAIN,
+    entry_id: str = "",
 ) -> dict:
-    """Download GTFS static data, cache it, return cache dict."""
-    # Train and tram are separate config entries, so they need separate caches.
-    cache_name = GTFS_CACHE_FILE if mode == MODE_TRAIN else \
-        GTFS_CACHE_FILE.replace(".json", f"_{mode}.json")
-    cache_path = Path(config_dir) / cache_name
+    """Download GTFS static data, cache it, return cache dict.
+
+    Without an entry_id (during setup, before there is one) nothing is cached.
+    """
+    with _load_lock:
+        return _load_gtfs(config_dir, station_names, route_ids, mode, entry_id)
+
+
+def _load_gtfs(
+    config_dir: str,
+    station_names: list[str],
+    route_ids: set[str],
+    mode: str,
+    entry_id: str,
+) -> dict:
+    cache_path = gtfs_cache_path(config_dir, entry_id) if entry_id else None
     today_str = datetime.now().astimezone().strftime("%Y%m%d")
 
     stale_cache: dict | None = None
 
-    if cache_path.exists():
+    if cache_path and cache_path.exists():
         try:
             with open(cache_path) as f:
                 cache = json.load(f)
@@ -382,8 +546,6 @@ def download_and_cache_gtfs(
             if (age_days < GTFS_CACHE_TTL_DAYS and cache.get("cached_date") == today_str
                     and cache.get("schema") == GTFS_CACHE_SCHEMA):
                 cached_stations = set(cache.get("scheduled_by_station", {}).keys())
-                # Departures and trip directions are for the cached routes only,
-                # and the file is shared by every entry of the same mode.
                 if (cache.get("route_ids") == sorted(route_ids)
                         and all(s.lower() in cached_stations for s in station_names)):
                     _LOGGER.debug("Using cached GTFS data (age %d days)", age_days)
@@ -394,16 +556,7 @@ def download_and_cache_gtfs(
             _LOGGER.warning("Could not read GTFS cache: %s", err)
 
     try:
-        url = resolve_gtfs_static_url()
-        _LOGGER.info("Downloading GTFS static schedule from %s", url)
-        resp = requests.get(
-            url,
-            # ~300 MB; 180s needs a sustained 13 Mbit/s, which times out on
-            # slower connections and leaves setup with no station list.
-            timeout=GTFS_DOWNLOAD_TIMEOUT,
-            headers=_HEADERS,
-        )
-        resp.raise_for_status()
+        metro_z = zipfile.ZipFile(_get_mode_zip(mode))
     except Exception as err:
         if stale_cache:
             _LOGGER.warning(
@@ -412,10 +565,6 @@ def download_and_cache_gtfs(
             )
             return stale_cache
         raise
-    _LOGGER.info("Downloaded %d KB", len(resp.content)//1024)
-
-    outer = zipfile.ZipFile(io.BytesIO(resp.content))
-    metro_z = _open_mode_zip(outer, mode)
     stops = _load_stops(metro_z, mode)
     route_stops = _route_stops(metro_z, route_ids, stops)
     direction_labels = _load_direction_labels(metro_z, route_ids)
@@ -464,12 +613,14 @@ def download_and_cache_gtfs(
         "scheduled_by_station": scheduled_by_station,
     }
 
-    try:
-        with open(cache_path, "w") as f:
-            json.dump(cache, f)
-        _LOGGER.info("GTFS cache saved")
-    except Exception as err:
-        _LOGGER.warning("Could not save GTFS cache: %s", err)
+    if cache_path:
+        try:
+            with open(cache_path, "w") as f:
+                json.dump(cache, f)
+            _LOGGER.info("GTFS cache saved")
+            (Path(config_dir) / GTFS_LEGACY_CACHE_FILES[mode]).unlink(missing_ok=True)
+        except Exception as err:
+            _LOGGER.warning("Could not save GTFS cache: %s", err)
 
     return cache
 

@@ -27,7 +27,13 @@ GTFS_STATIC_URL = (
     f"{GTFS_DATASET_ID}/resource/"
     "8af7737c-5c9e-4022-aa98-911aa04370a7/download/gtfs.zip"
 )
-GTFS_CACHE_FILE = "ptv_gtfs_cache.json"
+# One per config entry: the contents depend on its lines and stations.
+GTFS_CACHE_FILE = "ptv_gtfs_cache_{entry_id}.json"
+# Up to v0.2.2, one file per mode was shared by every entry.
+GTFS_LEGACY_CACHE_FILES = {
+    "train": "ptv_gtfs_cache.json",
+    "tram": "ptv_gtfs_cache_tram.json",
+}
 GTFS_CACHE_TTL_DAYS = 3
 # Bump when cached content changes meaning, so old caches are rebuilt.
 # 2: Metro Tunnel through-running departures.
@@ -37,6 +43,10 @@ GTFS_CACHE_TTL_DAYS = 3
 # 5: route_stops, to offer only the selected lines' stops in setup.
 GTFS_CACHE_SCHEMA = 5
 GTFS_DOWNLOAD_TIMEOUT = 420
+# Read the schedule zip in blocks this size (see gtfs_static._RangeFile).
+GTFS_RANGE_BLOCK = 4 * 1024 * 1024
+# How long a downloaded mode zip is kept for other entries to use.
+GTFS_SHARE_SECONDS = 900
 GTFS_METRO_INNER_ZIP = "2/google_transit.zip"
 GTFS_TRAM_INNER_ZIP = "3/google_transit.zip"
 

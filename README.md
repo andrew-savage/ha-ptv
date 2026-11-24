@@ -103,7 +103,7 @@ The config flow has four steps:
    - Count: 1–4 upcoming services to track
    - Select "(Done — no more stations)" when finished
 
-> If the station dropdown appears empty, the schedule download (~280 MB) did not complete. You can type any station name in manually and it will still resolve, or press Back and retry the step.
+> If the station dropdown appears empty, the schedule download (25–40 MB) did not complete. You can type any station name in manually and it will still resolve, or press Back and retry the step.
 
 ## Trams
 

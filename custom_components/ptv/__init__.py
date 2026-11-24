@@ -32,7 +32,7 @@ from .const import (
     DOMAIN, KNOWN_STOP_IDS, METRO_LINES, OCCUPANCY_LABELS,
     PROBLEM_NONE, PROBLEM_DELAYS, PROBLEM_ALERT, PROBLEM_CANCELLATIONS, PROBLEM_MAJOR,
 )
-from .gtfs_static import download_and_cache_gtfs, get_next_n_scheduled, get_stop_ids
+from .gtfs_static import download_and_cache_gtfs, get_next_n_scheduled, get_stop_ids, remove_gtfs_cache
 
 _LOGGER = logging.getLogger(__name__)
 PLATFORMS = ["binary_sensor", "sensor"]
@@ -176,6 +176,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 station_names,
                 route_ids,
                 mode,
+                entry.entry_id,
             )
             # Fill in stop IDs for any stations not hardcoded
             for name in station_names:
@@ -216,6 +217,11 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id)
     return unload_ok
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    await hass.async_add_executor_job(
+        remove_gtfs_cache, hass.config.config_dir, entry.entry_id)
 
 
 class PTVDataCoordinator(DataUpdateCoordinator):
@@ -345,10 +351,11 @@ class PTVDataCoordinator(DataUpdateCoordinator):
                 [s[CONF_STATION_NAME] for s in self.stations_config],
                 {routes[l] for l in self.monitored_lines if l in routes},
                 self.mode,
+                self.entry_id,
             )
         except Exception as err:
             # Keep yesterday's timetable rather than none, and don't retry the
-            # ~230 MB download on every poll.
+            # download on every poll.
             _LOGGER.warning("Daily timetable refresh failed: %s", err)
             self._gtfs_retry_after = now + GTFS_REFRESH_RETRY
             return
