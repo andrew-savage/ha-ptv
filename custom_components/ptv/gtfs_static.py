@@ -354,7 +354,10 @@ def download_and_cache_gtfs(
             if (age_days < GTFS_CACHE_TTL_DAYS and cache.get("cached_date") == today_str
                     and cache.get("schema") == GTFS_CACHE_SCHEMA):
                 cached_stations = set(cache.get("scheduled_by_station", {}).keys())
-                if all(s.lower() in cached_stations for s in station_names):
+                # Departures and trip directions are for the cached routes only,
+                # and the file is shared by every entry of the same mode.
+                if (cache.get("route_ids") == sorted(route_ids)
+                        and all(s.lower() in cached_stations for s in station_names)):
                     _LOGGER.debug("Using cached GTFS data (age %d days)", age_days)
                     return cache
             # Keep stale cache as a fallback in case the download fails
@@ -423,6 +426,7 @@ def download_and_cache_gtfs(
         "cached_date": today_str,
         "schema": GTFS_CACHE_SCHEMA,
         "mode": mode,
+        "route_ids": sorted(route_ids),
         "stops": stops,
         "direction_labels": direction_labels,
         "through_trips": through_trips,
