@@ -47,6 +47,21 @@ A Home Assistant custom integration for **Public Transport Victoria (PTV)** metr
 | `binary_sensor.ptv_<line>_cancellations` | ON when services cancelled |
 | `binary_sensor.ptv_<line>_service_alert` | ON when alert published |
 
+## Sensors created per direction
+
+The delay, cancellation and status entities are also created for each direction a station is set up for: citybound only, outbound only, or both. They count only that direction's services, so a late outbound train doesn't flag your morning citybound trip.
+
+| Entity | Description |
+|--------|-------------|
+| `sensor.ptv_<line>_<direction>_max_delay` | Worst current delay in that direction, in minutes. Attributes: `delay_count`, `cancelled_count` |
+| `sensor.ptv_<line>_<direction>_status` | e.g. `Sunbury citybound: delays up to 6 min; 8:21 AM (6 min late)` |
+| `binary_sensor.ptv_<line>_<direction>_delays` | ON when delays ≥ 5 min in that direction |
+| `binary_sensor.ptv_<line>_<direction>_cancellations` | ON when services in that direction are cancelled |
+
+`<direction>` is `citybound` or `outbound`. For trams, as with departures, the entity IDs keep these words, but the names use the destination, e.g. "PTV Route 96 To St Kilda Beach Max Delay".
+
+Service alerts stay line-wide. PTV publishes alerts against a line, not a direction, so they're only on the line's alert and status sensors. A service whose direction can't be determined (rare: the timetable normally has it) counts towards the line's figures but not either direction's.
+
 ## Sensors created per station or stop
 
 For each configured station or stop (e.g. Ivanhoe, citybound, count=4):

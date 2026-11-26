@@ -7,8 +7,11 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .sensor import _device, _ic, _is_tram, _line_label, _uid
-from .const import CONF_LINES, DOMAIN
+from .sensor import (
+    _device, _dir_suffix, _direction_label, _ic, _is_tram, _line_label, _stats, _uid,
+    configured_directions,
+)
+from .const import CONF_LINES, CONF_STATIONS, DOMAIN
 from . import PTVDataCoordinator
 
 
@@ -25,7 +28,20 @@ async def async_setup_entry(
             PTVAlertBinarySensor(coordinator, line),
             PTVProblemBinarySensor(coordinator, line),
         ]
+        for direction in configured_directions(entry.data.get(CONF_STATIONS, [])):
+            entities += [
+                PTVDelayBinarySensor(coordinator, line, direction),
+                PTVCancellationBinarySensor(coordinator, line, direction),
+            ]
     async_add_entities(entities)
+
+
+def _name(coordinator, line, direction, what: str) -> str:
+    """"PTV Sunbury Line Citybound Delays"; trams "PTV Route 96 To Box Hill Delays"."""
+    dir_name = _direction_label(coordinator, line, direction)
+    if _is_tram(coordinator):
+        return f"PTV {line} {dir_name} {what}"
+    return f"PTV {line} Line {dir_name} {what}"
 
 
 def _ld(coordinator, line):
@@ -36,20 +52,22 @@ def _ld(coordinator, line):
 class PTVDelayBinarySensor(CoordinatorEntity, BinarySensorEntity):
     """ON when delays ≥ 5 min."""
     _attr_device_class = BinarySensorDeviceClass.PROBLEM
-    def __init__(self, coordinator, line):
+    def __init__(self, coordinator, line, direction=None):
         super().__init__(coordinator)
         self._line = line
+        self._direction = direction  # None = whole line
         slug = line.lower().replace(" ","_")
-        self._attr_unique_id = _uid(coordinator, f"ptv_{slug}_delays")
-        self._attr_name = f"PTV {_line_label(coordinator, line)}Delays"
+        self._attr_unique_id = _uid(coordinator, f"ptv_{slug}{_dir_suffix(direction)}_delays")
+        self._attr_name = _name(coordinator, line, direction, "Delays") if direction \
+            else f"PTV {_line_label(coordinator, line)}Delays"
 
     @property
-    def is_on(self): return _ld(self.coordinator, self._line).get("has_delays", False)
+    def is_on(self): return _stats(self.coordinator, self._line, self._direction).get("has_delays", False)
     @property
     def icon(self): return _ic(self.coordinator, "mdi:train-alert" if self.is_on else "mdi:train")
     @property
     def extra_state_attributes(self):
-        d = _ld(self.coordinator, self._line)
+        d = _stats(self.coordinator, self._line, self._direction)
         return {
             "delay_count": d.get("delay_count", 0),
             "max_delay_minutes": round(d.get("max_delay_seconds", 0) / 60, 1),
@@ -61,15 +79,17 @@ class PTVDelayBinarySensor(CoordinatorEntity, BinarySensorEntity):
 class PTVCancellationBinarySensor(CoordinatorEntity, BinarySensorEntity):
     """ON when services are cancelled."""
     _attr_device_class = BinarySensorDeviceClass.PROBLEM
-    def __init__(self, coordinator, line):
+    def __init__(self, coordinator, line, direction=None):
         super().__init__(coordinator)
         self._line = line
+        self._direction = direction  # None = whole line
         slug = line.lower().replace(" ","_")
-        self._attr_unique_id = _uid(coordinator, f"ptv_{slug}_cancellations")
-        self._attr_name = f"PTV {_line_label(coordinator, line)}Cancellations"
+        self._attr_unique_id = _uid(coordinator, f"ptv_{slug}{_dir_suffix(direction)}_cancellations")
+        self._attr_name = _name(coordinator, line, direction, "Cancellations") if direction \
+            else f"PTV {_line_label(coordinator, line)}Cancellations"
 
     @property
-    def is_on(self): return _ld(self.coordinator, self._line).get("has_cancellations", False)
+    def is_on(self): return _stats(self.coordinator, self._line, self._direction).get("has_cancellations", False)
     @property
     def icon(self): return _ic(self.coordinator, "mdi:train-car-remove" if self.is_on else "mdi:train")
     @property

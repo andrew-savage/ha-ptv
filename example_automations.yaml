@@ -4,6 +4,7 @@
 # Entities used:
 #
 # binary_sensor.ptv_hurstbridge_line_any_problem   (on = something is wrong)
+# binary_sensor.ptv_hurstbridge_line_citybound_delays  (on = citybound delays only)
 # sensor.ptv_hurstbridge_line_problem_level        (none/delays/alert/cancellations/major)
 # sensor.ptv_hurstbridge_line_problem_summary      (TTS-ready sentence)
 #
@@ -175,3 +176,25 @@ automation:
             target:
               entity_id: light.your_indicator_light
             data: {color_name: red, brightness_pct: 100}
+
+  # ----------------------------------------------------------
+  # 6. Citybound delays only — ignores delays on outbound trains
+  #    Uses the per-direction sensors (created for each direction
+  #    a station is set up for)
+  # ----------------------------------------------------------
+  - alias: "Hurstbridge – Citybound delay alert"
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.ptv_hurstbridge_line_citybound_delays
+        to: "on"
+    condition:
+      - condition: time
+        after: "07:00:00"
+        before: "09:30:00"
+        weekday: [mon, tue, wed, thu, fri]
+    action:
+      - service: notify.mobile_app_your_phone
+        data:
+          title: "⏱️ Citybound delays – Hurstbridge Line"
+          message: >
+            {{ states('sensor.ptv_hurstbridge_line_citybound_status') }}

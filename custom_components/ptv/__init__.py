@@ -405,15 +405,27 @@ class PTVDataCoordinator(DataUpdateCoordinator):
             "outbound": [],
         }
 
-    def _empty_line_data(self) -> dict:
+    @staticmethod
+    def _empty_trip_stats() -> dict:
         return {
-            # Trip-level
             "delayed_trips": [],
             "cancelled_trips": [],
             "max_delay_seconds": 0,
             "delay_count": 0,
             "has_delays": False,
             "has_cancellations": False,
+        }
+
+    def _empty_line_data(self) -> dict:
+        return {
+            # Trip-level, for the whole line...
+            **self._empty_trip_stats(),
+            # ...and split by direction. Trips whose direction is unknown
+            # count only towards the line totals.
+            "by_direction": {
+                DIR_CITYBOUND: self._empty_trip_stats(),
+                DIR_OUTBOUND: self._empty_trip_stats(),
+            },
             # Alerts
             "alerts": [],
             "alert_count": 0,
@@ -650,12 +662,20 @@ class PTVDataCoordinator(DataUpdateCoordinator):
             if line is None and not continuing:
                 continue
             direction_id = self._trip_direction(tu, trip_dirs, platform_dirs)
+            # Line and per-direction stats this trip counts towards. Tunnel
+            # continuations of the line's trains only feed station departures.
+            stats = []
+            if line is not None:
+                stats.append(results[line])
+                dir_key = {1: DIR_CITYBOUND, 0: DIR_OUTBOUND}.get(direction_id)
+                if dir_key:
+                    stats.append(results[line]["by_direction"][dir_key])
 
             # 3=CANCELED, 5=DELETED
             if tu.trip.schedule_relationship in (3, 5):
-                if line is not None:
-                    results[line]["cancelled_trips"].append(trip_id)
-                    results[line]["has_cancellations"] = True
+                for st in stats:
+                    st["cancelled_trips"].append(trip_id)
+                    st["has_cancellations"] = True
                 if not self._is_other_day(tu):
                     for handled in self._handled_trips.values():
                         handled.add(trip_id)
@@ -692,15 +712,12 @@ class PTVDataCoordinator(DataUpdateCoordinator):
                     if not self._is_other_day(tu):
                         self._handled_trips[key].add(trip_id)
 
-            if line is None:
-                continue
-            data = results[line]
-            # Record line-level delay
             if trip_max_delay >= DEFAULT_DELAY_THRESHOLD:
-                data["delayed_trips"].append({"trip_id": trip_id, "delay_seconds": trip_max_delay})
-                data["delay_count"] += 1
-                data["max_delay_seconds"] = max(data["max_delay_seconds"], trip_max_delay)
-                data["has_delays"] = True
+                for st in stats:
+                    st["delayed_trips"].append({"trip_id": trip_id, "delay_seconds": trip_max_delay})
+                    st["delay_count"] += 1
+                    st["max_delay_seconds"] = max(st["max_delay_seconds"], trip_max_delay)
+                    st["has_delays"] = True
 
         if unknown_direction:
             _LOGGER.debug(
